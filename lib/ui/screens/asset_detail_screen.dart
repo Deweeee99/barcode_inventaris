@@ -1,5 +1,6 @@
   import 'package:flutter/material.dart';
   import 'package:google_fonts/google_fonts.dart';
+  import 'bash_form_screen.dart';
 
   class AssetDetailScreen extends StatefulWidget {
     // Kita terima data dari halaman sebelumnya
@@ -257,6 +258,10 @@
                             child: ElevatedButton.icon(
                               onPressed: () {
                                 // Aksi ke Halaman BAST
+                                   Navigator.push(
+                                   context,
+                                   MaterialPageRoute(builder: (context) => const BastFormScreen()),
+      );
                               },
                               icon: const Icon(Icons.description_outlined, size: 18, color: Colors.white),
                               label: Text("Buat BAST Mutasi", style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
