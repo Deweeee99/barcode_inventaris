@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'asset_list_screen.dart'; 
-import 'bash_form_screen.dart'; // 1. IMPORT FILE BAST DISINI
+import 'bash_form_screen.dart'; 
+import 'scan_screen.dart'; 
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -124,7 +125,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     icon: Icons.qr_code_scanner, 
                     label: "Scan", 
                     color: const Color(0xFFE3F2FD), 
-                    iconColor: Colors.blue
+                    iconColor: Colors.blue,
+                    onTap: () {
+                      Navigator.push(
+                        context, 
+                        MaterialPageRoute(builder: (context) => const ScanScreen())
+                      );
+                    }
                   ),
                   _buildQuickMenu(
                     icon: Icons.add_circle_outline, 
@@ -189,7 +196,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         height: 70,
         width: 70,
         child: FloatingActionButton(
-          onPressed: () {},
+          onPressed: () {
+            Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => const ScanScreen()),
+      );
+          },
           backgroundColor: const Color(0xFF0087FF),
           shape: const CircleBorder(),
           elevation: 4,
