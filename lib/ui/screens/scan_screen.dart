@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart'; // Library Kamera
 import 'package:google_fonts/google_fonts.dart';
-import 'asset_detail_screen.dart'; // Import Detail Screen
+import 'asset_detail_screen.dart'; // Pastikan file ini ada
 
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
@@ -11,45 +11,51 @@ class ScanScreen extends StatefulWidget {
 }
 
 class _ScanScreenState extends State<ScanScreen> {
-  bool _isScanning = true; // Status biar gak scan berkali-kali dalam 1 detik
-  MobileScannerController cameraController = MobileScannerController();
+  // Variabel penanda apakah kamera sedang boleh memproses barcode atau tidak
+  bool _isScanning = true; 
+  
+  // Remote Control untuk Kamera
+  final MobileScannerController cameraController = MobileScannerController();
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      // APP BAR TRANSPARAN
+      
+      // APP BAR (Transparan)
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
-        title: Text("Scan Aset", style: GoogleFonts.poppins(color: Colors.white)),
+        title: Text(
+          "Scan Aset", 
+          style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600)
+        ),
         actions: [
-          // TOMBOL SENTER / FLASH
+          // TOMBOL FLASH (Senter)
           ValueListenableBuilder(
-            valueListenable: cameraController, 
+            valueListenable: cameraController,
             builder: (context, state, child) {
-              // Menangani perbedaan versi: Cek apakah torchState ada di state
-              // Jika error di versi lama, biasanya cameraController.torchState terpisah
+              // Cek status senter
+              final isTorchOn = state.torchState == TorchState.on;
               return IconButton(
                 icon: Icon(
-                  state.torchState == TorchState.on ? Icons.flash_on : Icons.flash_off,
-                  color: state.torchState == TorchState.on ? Colors.yellow : Colors.grey,
+                  isTorchOn ? Icons.flash_on : Icons.flash_off,
+                  color: isTorchOn ? Colors.yellow : Colors.grey,
                 ),
                 onPressed: () => cameraController.toggleTorch(),
               );
             },
           ),
-          // TOMBOL GANTI KAMERA (DEPAN/BELAKANG)
+          // TOMBOL GANTI KAMERA (Depan/Belakang)
           ValueListenableBuilder(
-            valueListenable: cameraController, 
+            valueListenable: cameraController,
             builder: (context, state, child) {
+              // PERBAIKAN DISINI: Menggunakan CameraFacing agar kompatibel
+              final isFrontCamera = state.cameraDirection == CameraFacing.front;
               return IconButton(
                 icon: Icon(
-                  // PERBAIKAN: Menggunakan CameraFacing untuk kompatibilitas
-                  state.cameraDirection == CameraFacing.front 
-                      ? Icons.camera_front 
-                      : Icons.camera_rear,
+                  isFrontCamera ? Icons.camera_front : Icons.camera_rear,
                   color: Colors.white,
                 ),
                 onPressed: () => cameraController.switchCamera(),
@@ -58,26 +64,26 @@ class _ScanScreenState extends State<ScanScreen> {
           ),
         ],
       ),
+      
       body: Stack(
         children: [
-          // 1. KAMERA SCANNER
+          // 1. LAYAR KAMERA UTAMA
           MobileScanner(
             controller: cameraController,
             onDetect: (capture) {
-              if (!_isScanning) return; // Kalau lagi loading, jangan scan dulu
+              if (!_isScanning) return; 
               
               final List<Barcode> barcodes = capture.barcodes;
               for (final barcode in barcodes) {
                 if (barcode.rawValue != null) {
-                  // KETEMU! Proses kodenya
-                  _handleBarcodeFound(barcode.rawValue!); 
+                  _showResultDialog(barcode.rawValue!); 
                   break; 
                 }
               }
             },
           ),
-
-          // 2. OVERLAY KOTAK FOKUS (Visual Only)
+          
+          // 2. OVERLAY KOTAK FOKUS
           Center(
             child: Container(
               width: 250,
@@ -95,7 +101,7 @@ class _ScanScreenState extends State<ScanScreen> {
               ),
             ),
           ),
-
+          
           // 3. TEKS PETUNJUK
           Positioned(
             bottom: 100,
@@ -120,7 +126,6 @@ class _ScanScreenState extends State<ScanScreen> {
     );
   }
 
-  // WIDGET POJOKAN KOTAK (Hiasan)
   Widget _corner({int rot = 0}) {
     return RotatedBox(
       quarterTurns: rot ~/ 90,
@@ -136,40 +141,77 @@ class _ScanScreenState extends State<ScanScreen> {
     );
   }
 
-  // --- LOGIKA UTAMA DISINI ---
-  void _handleBarcodeFound(String code) async {
-    // 1. Stop scanning biar gak manggil fungsi ini berkali-kali
+  void _showResultDialog(String code) {
     setState(() {
       _isScanning = false;
     });
 
-    // 2. Munculkan Loading
     showDialog(
-      context: context, 
+      context: context,
       barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator())
+      builder: (context) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          title: Row(
+            children: [
+              const Icon(Icons.qr_code, color: Color(0xFF0087FF)),
+              const SizedBox(width: 10),
+              Text("Barcode Ditemukan", style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text("Isi Barcode:", style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey)),
+              const SizedBox(height: 5),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey[300]!),
+                ),
+                child: SelectableText( 
+                  code, 
+                  style: GoogleFonts.sourceCodePro(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context); 
+                setState(() {
+                  _isScanning = true; 
+                });
+              },
+              child: Text("Scan Lagi", style: GoogleFonts.poppins(color: Colors.grey)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context); 
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => AssetDetailScreen(
+                      assetName: "Aset Hasil Scan", 
+                      assetId: code,                
+                    ),
+                  ),
+                );
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0087FF),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: Text("Lihat Detail", style: GoogleFonts.poppins(color: Colors.white)),
+            ),
+          ],
+        );
+      },
     );
- if (mounted) {
-       Navigator.pop(context); // Tutup Loading
-       
-       // Pindah ke Halaman Detail
-       // Pakai pushReplacement biar kalau di-back gak balik ke kamera
-       Navigator.pushReplacement(
-         context,
-         MaterialPageRoute(
-           builder: (context) => AssetDetailScreen(
-             assetName: "Aset Hasil Scan", // Nanti ini diganti data.name
-             assetId: code,                // Ini kode yg discan tadi
-           ),
-         ),
-       ).then((value) {
-         // Kalau user balik lagi ke sini, nyalakan scanner lagi
-         if (mounted) {
-            setState(() {
-                _isScanning = true;
-            });
-         }
-       });
-    }
   }
 }
