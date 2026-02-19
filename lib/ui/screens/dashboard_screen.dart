@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'asset_list_screen.dart'; 
 import 'bash_form_screen.dart'; 
 import 'scan_screen.dart'; 
+import 'form_add_asset_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -137,7 +138,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     icon: Icons.add_circle_outline, 
                     label: "Tagging", 
                     color: const Color(0xFFE8F5E9), 
-                    iconColor: Colors.green
+                    iconColor: Colors.green,
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => const MyApp() ) 
+                      );
+                    }
                   ),
                   
                   // 2. TOMBOL MUTASI (GRID) YANG BISA DIKLIK
