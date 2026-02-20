@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'dart:convert';
+import 'dart:io'; 
+import 'package:image_picker/image_picker.dart'; 
+import 'package:dio/dio.dart'; 
+
 import 'bash_form_screen.dart';
-import '../../models/barang_model.dart'; // <--- IMPORT MODEL LU DISINI
+import '../../models/barang_model.dart'; 
+import '../../services/api_services.dart'; 
 
 class AssetDetailScreen extends StatefulWidget {
-  // Kita terima data OBJECT UTUH dari halaman sebelumnya
   final BarangModel asset;
 
   const AssetDetailScreen({
@@ -17,90 +22,177 @@ class AssetDetailScreen extends StatefulWidget {
 }
 
 class _AssetDetailScreenState extends State<AssetDetailScreen> {
-  // Variabel untuk Dropdown Kondisi
-  final List<String> conditionItems = [
-    'Baik (Layak Operasi)',
-    'Rusak Ringan',
-    'Rusak Berat',
-    'Dalam Perbaikan',
-  ];
+  final ApiService _apiService = ApiService();
+  bool _isLoading = false;
+  
+  // --- STATE DATA DARI API ---
+  bool _isFetchingDetail = true; 
+  late BarangModel _currentAsset; 
+
+  final List<String> conditionItems = ['Pilih kondisi...', 'Baik', 'Rusak Ringan', 'Rusak Berat', 'Dalam Perbaikan'];
   String? selectedCondition;
+  String? _initialCondition; 
+
+  // --- CONTROLLER CATATAN & KAMERA ---
+  final TextEditingController _catatanCtrl = TextEditingController();
+  final ImagePicker _picker = ImagePicker();
+  XFile? _fotoKondisi;
 
   @override
   void initState() {
     super.initState();
-    selectedCondition = conditionItems[0]; // Default: Baik
+    // Gunakan data awal dari list terlebih dahulu biar layar gak kosong
+    _currentAsset = widget.asset; 
+    _mapConditionFromDatabase();
+    
+    // Ambil data lengkap (Kontrak + Kondisi Terakhir) dari server
+    _fetchDetailDariServer();
+  }
+
+  @override
+  void dispose() {
+    _catatanCtrl.dispose();
+    super.dispose();
+  }
+
+  // Fungsi buat narik data barang secara komplit berdasarkan barcode
+  Future<void> _fetchDetailDariServer() async {
+    if (!mounted) return;
+    setState(() => _isFetchingDetail = true);
+    
+    try {
+      final response = await _apiService.getDetailBarang(_currentAsset.kodeBarcode);
+      var data = response.data;
+      if (data is String) data = jsonDecode(data);
+      
+      // Ambil data barang dari bungkusan JSON sesuai struktur backend Laravel
+      var jsonData = data['data'] ?? data['barang'] ?? data;
+
+      if (jsonData != null && mounted) {
+        setState(() {
+          _currentAsset = BarangModel.fromJson(jsonData);
+          _mapConditionFromDatabase(); 
+          _isFetchingDetail = false;
+        });
+      }
+    } catch (e) {
+      debugPrint("Error refresh detail: $e");
+      if (mounted) setState(() => _isFetchingDetail = false); 
+    }
+  }
+
+  // Menyelaraskan teks kondisi dari database ke item dropdown agar tidak error
+  void _mapConditionFromDatabase() {
+    String dbKondisi = _currentAsset.kondisi; 
+    String dbKondisiLower = dbKondisi.toLowerCase();
+    
+    if (dbKondisiLower.contains('baik')) {
+      selectedCondition = conditionItems[0];
+    } else if (dbKondisiLower.contains('ringan')) {
+      selectedCondition = conditionItems[1];
+    } else if (dbKondisiLower.contains('berat')) {
+      selectedCondition = conditionItems[2];
+    } else if (dbKondisiLower.contains('perbaikan')) {
+      selectedCondition = conditionItems[3];
+    } else {
+      if (!conditionItems.contains(dbKondisi)) {
+        conditionItems.add(dbKondisi);
+      }
+      selectedCondition = dbKondisi;
+    }
+    // Simpan kondisi awal untuk perbandingan aktifasi tombol simpan
+    _initialCondition = selectedCondition; 
+  }
+
+  // Buka kamera HP buat ambil foto kondisi
+  Future<void> _ambilFoto() async {
+    try {
+      final XFile? pickedFile = await _picker.pickImage(source: ImageSource.camera, imageQuality: 80);
+      if (pickedFile != null) setState(() => _fotoKondisi = pickedFile);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Kamera tidak dapat dibuka Tuan!'), backgroundColor: Colors.red));
+    }
+  }
+
+  // Simpan perubahan kondisi aset ke server
+  Future<void> _updateKondisiKeServer() async {
+    setState(() => _isLoading = true);
+    try {
+      Map<String, dynamic> dataUpdate = {
+        "status_kondisi": selectedCondition,
+        "catatan": _catatanCtrl.text.trim().isNotEmpty ? _catatanCtrl.text.trim() : "Update kondisi via mobile",
+      };
+
+      if (_fotoKondisi != null) {
+        dataUpdate["foto_kondisi"] = await MultipartFile.fromFile(_fotoKondisi!.path, filename: _fotoKondisi!.name);
+      }
+
+      await _apiService.updateKondisiBarang(_currentAsset.id, dataUpdate);
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Kondisi aset berhasil diperbarui!'), backgroundColor: Colors.green)
+        );
+        
+        // --- JURUS SAKTI: Balik ke List Aset sambil ngasih tau buat Refresh ---
+        Navigator.pop(context, true); 
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Gagal update: $e", style: GoogleFonts.poppins(fontSize: 12)), backgroundColor: Colors.red)
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    bool isPersonal = _currentAsset.statusPenguasaan.toLowerCase() == 'personal';
+    
+    // Logika tombol: Aktif jika kondisi berubah, catatan diisi, atau foto diambil
+    // Tapi tombol mati kalau lagi loading simpan
+    bool isConditionChanged = selectedCondition != null && selectedCondition != _initialCondition;
+    bool isNoteFilled = _catatanCtrl.text.trim().isNotEmpty;
+    bool isPhotoTaken = _fotoKondisi != null;
+    bool canSave = (isConditionChanged || isNoteFilled || isPhotoTaken) && !_isLoading;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF0056D2), // Biru Tua Header
+        backgroundColor: const Color(0xFF0056D2),
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => Navigator.pop(context, false), // Default balik tanpa refresh
         ),
-        title: Text(
-          "Detail Aset",
-          style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600),
-        ),
+        title: Text("Detail Aset", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w600)),
         centerTitle: true,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.more_vert, color: Colors.white),
-            onPressed: () {},
-          ),
-        ],
       ),
-      // BODY
       body: SingleChildScrollView(
         child: Column(
           children: [
-            // BAGIAN ATAS (HEADER BIRU)
+            // --- HEADER INFO UTAMA ---
             Container(
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
-              decoration: const BoxDecoration(
-                color: Color(0xFF0056D2),
-                borderRadius: BorderRadius.only(
-                  bottomLeft: Radius.circular(30),
-                  bottomRight: Radius.circular(30),
-                ),
-              ),
+              decoration: const BoxDecoration(color: Color(0xFF0056D2), borderRadius: BorderRadius.only(bottomLeft: Radius.circular(30), bottomRight: Radius.circular(30))),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    widget.asset.namaBarang, // <--- NAMA ASET DINAMIS DARI API
-                    style: GoogleFonts.poppins(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
+                  Text(_currentAsset.namaBarang, style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
                   const SizedBox(height: 8),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white.withOpacity(0.3)),
-                    ),
+                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(8)),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         const Icon(Icons.qr_code, color: Colors.white, size: 16),
                         const SizedBox(width: 8),
-                        Text(
-                          widget.asset.kodeBarcode, // <--- BARCODE DINAMIS DARI API
-                          style: GoogleFonts.sourceCodePro(
-                            color: Colors.white,
-                            fontSize: 14,
-                          ),
-                        ),
+                        Text(_currentAsset.kodeBarcode, style: GoogleFonts.sourceCodePro(color: Colors.white, fontSize: 14)),
                       ],
                     ),
                   ),
@@ -108,63 +200,48 @@ class _AssetDetailScreenState extends State<AssetDetailScreen> {
               ),
             ),
 
-            // CONTENT KARTU-KARTU
             Padding(
               padding: const EdgeInsets.all(20.0),
               child: Column(
                 children: [
-                  // 1. KARTU DATA INVENTARIS
+                  // 1. DATA INVENTARIS
                   _buildCard(
                     title: "Data Inventaris",
                     icon: Icons.description_outlined,
-                    child: Column(
-                      children: [
-                        _buildInfoRow("Lokasi Fisik", widget.asset.lokasiFisik), // <--- DARI API
-                        _buildInfoRow("Tgl. Labeling", widget.asset.tglLabeling), // <--- DARI API
-                        const SizedBox(height: 10),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                    child: _isFetchingDetail 
+                      ? const Center(child: CircularProgressIndicator())
+                      : Column(
                           children: [
-                            SizedBox(
-                              width: 100,
-                              child: Text("Spesifikasi", style: GoogleFonts.poppins(color: Colors.grey, fontSize: 12)),
-                            ),
-                            Expanded(
-                              child: Text(
-                                widget.asset.spesifikasi, // <--- SPESIFIKASI DARI API
-                                style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600),
-                              ),
-                            ),
+                            _buildInfoRow("Tipe Aset", _currentAsset.statusPenguasaan.toUpperCase()),
+                            if (isPersonal) _buildInfoRow("Pemegang", _currentAsset.karyawanPemegang)
+                            else _buildInfoRow("Lokasi Fisik", _currentAsset.lokasiFisik),
+                            _buildInfoRow("Tgl. Labeling", _currentAsset.tglLabeling),
+                            _buildInfoRow("Spesifikasi", _currentAsset.spesifikasi),
+                            _buildInfoRow("Kondisi Terakhir", _currentAsset.kondisi),
                           ],
                         ),
-                        const SizedBox(height: 15),
-                        const Divider(),
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            const CircleAvatar(
-                              radius: 18,
-                              backgroundColor: Color(0xFFFFE0B2),
-                              child: Icon(Icons.person, color: Colors.orange, size: 20),
-                            ),
-                            const SizedBox(width: 12),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text("Karyawan Pemegang", style: GoogleFonts.poppins(fontSize: 10, color: Colors.grey)),
-                                // Ini masih hardcode karena di ERD lu kaga ada field relasi karyawan di tabel m_barang
-                                Text("Andiro Rizky Dwitama (IT Support)", style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.bold)), 
-                              ],
-                            )
-                          ],
-                        )
-                      ],
-                    ),
                   ),
-
                   const SizedBox(height: 20),
 
-                  // 2. KARTU UPDATE KONDISI
+                  // 2. DETAIL KONTRAK / PO
+                  _buildCard(
+                    title: "Detail Kontrak / PO",
+                    icon: Icons.assignment_outlined,
+                    iconColor: Colors.purple, 
+                    child: _isFetchingDetail 
+                      ? const Center(child: CircularProgressIndicator(color: Colors.purple))
+                      : Column(
+                          children: [
+                            _buildInfoRow("No. Kontrak", _currentAsset.noKontrak),
+                            _buildInfoRow("Thn. Pengadaan", _currentAsset.tahunPengadaan),
+                            _buildInfoRow("Vendor/Supplier", _currentAsset.vendor),
+                            _buildInfoRow("Pihak Pengada", _currentAsset.pihakPengada),
+                          ],
+                        ),
+                  ),
+                  const SizedBox(height: 20),
+
+                  // 3. UPDATE KONDISI FISIK
                   _buildCard(
                     title: "Update Kondisi Fisik",
                     icon: Icons.camera_alt_outlined,
@@ -172,128 +249,78 @@ class _AssetDetailScreenState extends State<AssetDetailScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text("Kondisi Saat Ini", style: GoogleFonts.poppins(color: Colors.grey, fontSize: 12)),
-                        const SizedBox(height: 8),
-                        // DROPDOWN
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey[300]!),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: DropdownButtonHideUnderline(
-                            child: DropdownButton<String>(
-                              value: selectedCondition,
-                              isExpanded: true,
-                              icon: const Icon(Icons.keyboard_arrow_down),
-                              items: conditionItems.map((String item) {
-                                return DropdownMenuItem<String>(
-                                  value: item,
-                                  child: Text(item, style: GoogleFonts.poppins(fontSize: 13)),
-                                );
-                              }).toList(),
-                              onChanged: (String? newValue) {
-                                setState(() {
-                                  selectedCondition = newValue;
-                                });
-                              },
-                            ),
-                          ),
+                        DropdownButtonFormField<String>(
+                          initialValue: selectedCondition,
+                          decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)), contentPadding: const EdgeInsets.symmetric(horizontal: 12)),
+                          items: conditionItems.map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 13)))).toList(),
+                          onChanged: _isLoading ? null : (v) => setState(() => selectedCondition = v),
                         ),
                         const SizedBox(height: 15),
-                        // TOMBOL FOTO (DASHED BORDER)
-                        SizedBox(
-                          width: double.infinity,
-                          height: 45,
-                          child: OutlinedButton.icon(
-                            onPressed: () {},
-                            icon: const Icon(Icons.camera_alt, size: 18, color: Colors.grey),
-                            label: Text("Ambil Foto Bukti", style: GoogleFonts.poppins(color: Colors.grey)),
-                            style: OutlinedButton.styleFrom(
-                              side: const BorderSide(color: Colors.grey, style: BorderStyle.solid), // Harusnya dashed, pake package dotted_border kalau mau persis
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                            ),
-                          ),
+                        TextField(
+                          controller: _catatanCtrl,
+                          maxLines: 2,
+                          enabled: !_isLoading,
+                          onChanged: (v) => setState(() {}),
+                          decoration: InputDecoration(hintText: "Alasan perubahan kondisi (Opsional)...", hintStyle: const TextStyle(fontSize: 12, color: Colors.grey), border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)), contentPadding: const EdgeInsets.all(12)),
                         ),
+                        const SizedBox(height: 15),
+                        _fotoKondisi == null
+                          ? SizedBox(width: double.infinity, child: OutlinedButton.icon(onPressed: _isLoading ? null : _ambilFoto, icon: const Icon(Icons.camera_alt), label: const Text("Ambil Foto Bukti")))
+                          : Column(children: [
+                              ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.file(File(_fotoKondisi!.path), height: 150, width: double.infinity, fit: BoxFit.cover)),
+                              TextButton.icon(onPressed: _isLoading ? null : _ambilFoto, icon: const Icon(Icons.refresh, size: 16), label: const Text("Ganti Foto"), style: TextButton.styleFrom(foregroundColor: Colors.orange))
+                            ]),
                       ],
                     ),
                   ),
+                  const SizedBox(height: 30),
 
-                  const SizedBox(height: 20),
-
-                  // 3. KARTU MOBILISASI (BAST)
+                  // 4. MOBILISASI (BAST DIGITAL)
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE3F2FD), // Biru Muda
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: const Color(0xFFBBDEFB)),
-                    ),
+                    decoration: BoxDecoration(color: const Color(0xFFE3F2FD), borderRadius: BorderRadius.circular(20)),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          children: [
-                            const Icon(Icons.swap_horiz, color: Color(0xFF0087FF)),
-                            const SizedBox(width: 10),
-                            Text(
-                              "Update Mobilisasi",
-                              style: GoogleFonts.poppins(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                                color: const Color(0xFF0087FF),
-                              ),
-                            ),
-                          ],
-                        ),
+                        const Text("Update Mobilisasi", style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0087FF))),
                         const SizedBox(height: 10),
-                        Text(
-                          "Pindah tanggung jawab atau lokasi aset ini ke karyawan lain melalui BAST Digital",
-                          style: GoogleFonts.poppins(fontSize: 12, color: const Color(0xFF1565C0)),
-                        ),
+                        const Text("Mutasi aset langsung melalui BAST Digital tanpa scan ulang.", style: TextStyle(fontSize: 11, color: Color(0xFF1565C0))),
                         const SizedBox(height: 15),
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton.icon(
-                            onPressed: () {
-                              // Aksi ke Halaman BAST
-                                 Navigator.push(
-                                 context,
-                                 MaterialPageRoute(builder: (context) => const BastFormScreen()),
-      );
+                            onPressed: _isLoading ? null : () async {
+                              final result = await Navigator.push(
+                                context, 
+                                MaterialPageRoute(builder: (context) => BastFormScreen(initialAsset: _currentAsset))
+                              );
+                              if (result == true) {
+                                _fetchDetailDariServer();
+                              }
                             },
-                            icon: const Icon(Icons.description_outlined, size: 18, color: Colors.white),
-                            label: Text("Buat BAST Mutasi", style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF0087FF),
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                              elevation: 0,
-                            ),
+                            icon: const Icon(Icons.description_outlined),
+                            label: const Text("Buat BAST Mutasi"),
+                            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0087FF), foregroundColor: Colors.white),
                           ),
                         )
                       ],
                     ),
                   ),
-
                   const SizedBox(height: 30),
-                  
-                  // TOMBOL SIMPAN PALING BAWAH
+
+                  // 5. TOMBOL SIMPAN SAKTI
                   SizedBox(
                     width: double.infinity,
                     height: 55,
-                    child: OutlinedButton.icon(
-                      onPressed: () {},
-                      icon: const Icon(Icons.save, color: Color(0xFF0087FF)),
-                      label: Text("Simpan Update Kondisi", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16, color: const Color(0xFF0087FF))),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Color(0xFF0087FF), width: 1.5),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-                      ),
+                    child: ElevatedButton.icon(
+                      onPressed: !canSave ? null : _updateKondisiKeServer,
+                      icon: _isLoading ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.save),
+                      label: Text(_isLoading ? "Menyimpan..." : "Simpan Update Kondisi", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16)),
+                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0056D2), foregroundColor: Colors.white, disabledBackgroundColor: Colors.grey[400], shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 50),
                 ],
               ),
             ),
@@ -303,58 +330,6 @@ class _AssetDetailScreenState extends State<AssetDetailScreen> {
     );
   }
 
-  // WIDGET HELPER: Membuat Baris Info
-  Widget _buildInfoRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 100,
-            child: Text(label, style: GoogleFonts.poppins(color: Colors.grey, fontSize: 12)),
-          ),
-          Expanded(
-            child: Text(value, style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // WIDGET HELPER: Membuat Card Putih
-  Widget _buildCard({required String title, required IconData icon, Color iconColor = Colors.blue, required Widget child}) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.withOpacity(0.1),
-            blurRadius: 10,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, color: iconColor, size: 20),
-              const SizedBox(width: 10),
-              Text(
-                title,
-                style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14),
-              ),
-            ],
-          ),
-          const Divider(height: 25),
-          child,
-        ],
-      ),
-    );
-  }
+  Widget _buildInfoRow(String label, String value) => Padding(padding: const EdgeInsets.only(bottom: 12.0), child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [SizedBox(width: 100, child: Text(label, style: const TextStyle(color: Colors.grey, fontSize: 11))), Expanded(child: Text(value, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)))]));
+  Widget _buildCard({required String title, required IconData icon, Color iconColor = Colors.blue, required Widget child}) => Container(width: double.infinity, padding: const EdgeInsets.all(20), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 5))]), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(children: [Icon(icon, color: iconColor, size: 20), const SizedBox(width: 10), Text(title, style: const TextStyle(fontWeight: FontWeight.bold))]), const Divider(height: 25), child]));
 }

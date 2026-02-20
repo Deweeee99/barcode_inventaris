@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-// Import dashboard agar bisa dikenali
+import 'package:shared_preferences/shared_preferences.dart'; // <-- Buat nyimpen token
+
+import '../../services/api_services.dart'; // <-- Mesin API kita
 import 'dashboard_screen.dart'; 
 
 class LoginScreen extends StatefulWidget {
@@ -11,11 +13,86 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  final ApiService _apiService = ApiService(); // Panggil mesin API
+
   bool _obscureText = true;
   bool _isConsentChecked = false;
+  bool _isLoading = false; // State buat nahan loading
 
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+
+  // FUNGSI INTI BUAT LOGIN KE SERVER
+  Future<void> _handleLogin() async {
+    // 1. Validasi kosong
+    if (_usernameController.text.isEmpty || _passwordController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Username sama Password jangan dikosongin bos!'), backgroundColor: Colors.red),
+      );
+      return;
+    }
+
+    setState(() {
+      _isLoading = true; // Nyalain muter-muter
+    });
+
+    try {
+      // 2. Tembak API Login pake data ketikan
+      final response = await _apiService.login(
+        _usernameController.text, 
+        _passwordController.text
+      );
+
+      // 3. Ekstrak Token dari balikan Server
+      String? token;
+      if (response.data['token'] != null) {
+        token = response.data['token'];
+      } else if (response.data['data'] != null && response.data['data']['token'] != null) {
+        token = response.data['data']['token'];
+      }
+
+      if (token != null) {
+        // 4. Buka Brankas HP dan Simpen Tokennya!
+        SharedPreferences prefs = await SharedPreferences.getInstance();
+        await prefs.setString('auth_token', token);
+
+        if (response.data['user'] != null && response.data['user']['name'] != null) {
+          await prefs.setString('nama_user', response.data['user']['name']);
+        } else {
+          // Kalo API lu belom ngasih nama di balikan login, sementara pake username ketikan lu aja
+          await prefs.setString('nama_user', _usernameController.text); 
+        }
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Login Sukses! Selamat datang Tuan.'), backgroundColor: Colors.green),
+          );
+
+          // 5. Pindah ke Dashboard pake pushReplacement (biar kaga bisa di-back ke login)
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const DashboardScreen()),
+          );
+        }
+      } else {
+        throw Exception("Waduh, server kaga ngasih token nih!");
+      }
+
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Gagal Login: Cek lagi username/password lu!'), backgroundColor: Colors.red),
+        );
+        print("Error Login: $e");
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false; // Matiin muter-muter
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -139,20 +216,15 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 40),
 
-              // TOMBOL LOGIN DENGAN NAVIGASI
+              // TOMBOL LOGIN DENGAN NAVIGASI & LOADING API
               SizedBox(
                 width: double.infinity,
                 height: 55,
                 child: ElevatedButton(
-                  onPressed: _isConsentChecked 
-                    ? () {
-                        // PINDAH KE HALAMAN DASHBOARD
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (context) => const DashboardScreen()),
-                        );
-                      }
-                    : null, 
+                  // Logikanya: Kalo belom dicentang ATAU lagi loading muter, tombol kaga bisa dipencet (null)
+                  onPressed: (!_isConsentChecked || _isLoading) 
+                    ? null 
+                    : _handleLogin, 
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF0087FF),
                     foregroundColor: Colors.white,
@@ -161,13 +233,19 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     elevation: 0,
                   ),
-                  child: Text(
-                    "Login",
-                    style: GoogleFonts.poppins(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                  child: _isLoading 
+                    ? const SizedBox(
+                        height: 24, 
+                        width: 24, 
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)
+                      )
+                    : Text(
+                        "Login",
+                        style: GoogleFonts.poppins(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                 ),
               ),
               const SizedBox(height: 20),

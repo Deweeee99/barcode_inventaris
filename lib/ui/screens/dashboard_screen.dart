@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'dart:convert'; // Wajib buat jinakin JSON
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 
-// Sesuaikan path import ini kalau merah ya Tuan!
 import '../../models/dashboard_model.dart'; 
 import '../../services/api_services.dart'; 
 
@@ -10,9 +10,7 @@ import 'asset_list_screen.dart';
 import 'bash_form_screen.dart'; 
 import 'scan_screen.dart'; 
 import 'form_add_asset_screen.dart';
-
-// Asumsi lu punya file main.dart atau ganti ke halaman yang bener buat Tagging
-import '../../main.dart'; 
+import 'profile_screen.dart'; // <--- Import ini Tuan!
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -22,35 +20,89 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  int _selectedIndex = 0; 
-
-  // 1. Panggil Senjata API lu
   final ApiService _apiService = ApiService();
   late Future<DashboardModel> _futureDashboard;
+  
+  int _selectedIndex = 0; 
 
   @override
   void initState() {
     super.initState();
-    // 2. Langsung sedot data pas halaman kebuka
     _futureDashboard = fetchDashboard();
   }
 
-  // 3. Fungsi Nyedot Data Dashboard Anti Badai
   Future<DashboardModel> fetchDashboard() async {
-    try {
-      final response = await _apiService.getDashboardSummary();
-      dynamic responseData = response.data;
-      
-      // Kalo Postman ngide ngirim String mentah
-      if (responseData is String) {
-        responseData = jsonDecode(responseData);
-      }
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String namaUserAsli = prefs.getString('nama_user') ?? "Admin TSI";
 
-      // Ambil bungkus "data" dari JSON lu
-      final data = responseData['data'];
-      return DashboardModel.fromJson(data);
-    } catch (e) {
-      throw Exception('Gagal nyedot data dashboard: $e');
+    final response = await _apiService.getDashboardSummary(); 
+    dynamic responseData;
+
+    if (response.data is String) {
+      String raw = response.data.toString().trim();
+      int startIndex = raw.indexOf('{');
+      int endIndex = raw.lastIndexOf('}');
+      if (startIndex != -1 && endIndex != -1 && endIndex >= startIndex) {
+        raw = raw.substring(startIndex, endIndex + 1);
+      }
+      responseData = jsonDecode(raw);
+    } else {
+      responseData = response.data;
+    }
+
+    int totalData = 0;
+    int barangRusak = 0;
+    List<dynamic> listBarang = [];
+
+    if (responseData != null && responseData is Map) {
+      if (responseData.containsKey('statistik')) {
+        var stat = responseData['statistik'];
+        totalData = int.tryParse(stat['total_aset']?.toString() ?? '0') ?? 0;
+        barangRusak = int.tryParse(stat['total_rusak']?.toString() ?? '0') ?? 0;
+      }
+      if (responseData.containsKey('barang')) {
+        var barangObj = responseData['barang'];
+        if (barangObj is Map && barangObj.containsKey('data')) {
+          listBarang = barangObj['data'] ?? [];
+        } else if (barangObj is List) {
+          listBarang = barangObj;
+        }
+      }
+    }
+
+    List<AktivitasModel> aktivitasDinamis = [];
+    if (listBarang.isNotEmpty) {
+      int ambilBerapa = listBarang.length > 3 ? 3 : listBarang.length;
+      for (int i = 0; i < ambilBerapa; i++) {
+        var item = listBarang[i]; 
+        aktivitasDinamis.add(
+          AktivitasModel(
+            judul: "Aset: ${item['kode_barcode'] ?? '-'}", 
+            deskripsi: item['nama_barang'] ?? 'Aset Baru', 
+            waktu: item['created_at'] != null 
+                ? item['created_at'].toString().split(' ').last.substring(0, 5) 
+                : "Baru Saja"
+          )
+        );
+      }
+    } else {
+       aktivitasDinamis.add(AktivitasModel(judul: "Belum Ada Aset", deskripsi: "Silakan tambah data aset", waktu: "-"));
+    }
+
+    return DashboardModel(
+      namaUser: namaUserAsli,
+      totalAset: totalData,
+      perluMaintenance: barangRusak,
+      aktivitasTerbaru: aktivitasDinamis,
+    );
+  }
+
+  // --- JURUS SWITCHING HALAMAN ---
+  Widget _buildBody() {
+    switch (_selectedIndex) {
+      case 0: return _buildHomeContent();
+      case 3: return const ProfileScreen(); // Langsung tampilin layar profil
+      default: return _buildHomeContent();
     }
   }
 
@@ -58,235 +110,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
-      
-      // 4. BUNGKUS SELURUH BODY PAKE FUTURE BUILDER
-      body: SafeArea(
-        child: FutureBuilder<DashboardModel>(
-          future: _futureDashboard,
-          builder: (context, snapshot) {
-            // Pas lagi nunggu server
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            } 
-            // Kalo server ngambek
-            else if (snapshot.hasError) {
-              return Center(child: Text('Error bos: ${snapshot.error}'));
-            } 
-            // Kalo data gaib
-            else if (!snapshot.hasData) {
-              return const Center(child: Text('Data dashboard kosong.'));
-            }
+      body: SafeArea(child: _buildBody()), // Gunakan _buildBody()
 
-                  
-            final dashboardData = snapshot.data!;
-
-            return SingleChildScrollView(
-              padding: const EdgeInsets.all(20.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // HEADER
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text("Selamat pagi,", style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey[600])),
-                          // TAMPILIN NAMA USER DARI API
-                          Text(dashboardData.namaUser, style: GoogleFonts.poppins(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.black)),
-                        ],
-                      ),
-                      Stack(
-                        children: [
-                          const Icon(Icons.notifications_none_outlined, size: 32),
-                          Positioned(right: 4, top: 4, child: Container(width: 8, height: 8, decoration: const BoxDecoration(color: Colors.black, shape: BoxShape.circle))),
-                        ],
-                      )
-                    ],
-                  ),
-                  const SizedBox(height: 25),
-
-                  // RINGKASAN STATUS
-                  Row(
-                    children: [
-                      // Kartu Biru
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF0087FF),
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [BoxShadow(color: const Color(0xFF0087FF).withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 5))],
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Icon(Icons.inventory_2_outlined, color: Colors.white, size: 24),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), borderRadius: BorderRadius.circular(8)),
-                                    child: Text("Total", style: GoogleFonts.poppins(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w500)),
-                                  )
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              // TAMPILIN TOTAL ASET DARI API
-                              Text(dashboardData.totalAset.toString(), style: GoogleFonts.poppins(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
-                              Text("Aset dalam tanggung jawab", style: GoogleFonts.poppins(fontSize: 10, color: Colors.white.withOpacity(0.9))),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 15),
-                      // Kartu Putih
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: Colors.grey[200]!),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Icon(Icons.error_outline_rounded, color: Colors.red, size: 24),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                    decoration: BoxDecoration(color: Colors.red[50], borderRadius: BorderRadius.circular(8)),
-                                    child: Text("Action", style: GoogleFonts.poppins(color: Colors.red, fontSize: 10, fontWeight: FontWeight.bold)),
-                                  )
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              // TAMPILIN MAINTENANCE DARI API
-                              Text(dashboardData.perluMaintenance.toString(), style: GoogleFonts.poppins(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.black)),
-                              Text("Perlu Maintenance", style: GoogleFonts.poppins(fontSize: 10, color: Colors.grey[600])),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 35),
-                  Text("MENU CEPAT", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14, letterSpacing: 1.0)),
-                  const SizedBox(height: 15),
-
-                  // GRID MENU CEPAT
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      _buildQuickMenu(
-                        icon: Icons.qr_code_scanner, 
-                        label: "Scan", 
-                        color: const Color(0xFFE3F2FD), 
-                        iconColor: Colors.blue,
-                        onTap: () {
-                          Navigator.push(
-                            context, 
-                            MaterialPageRoute(builder: (context) => const ScanScreen())
-                          );
-                        }
-                      ),
-                      _buildQuickMenu(
-                        icon: Icons.add_circle_outline, 
-                        label: "Tagging", 
-                        color: const Color(0xFFE8F5E9), 
-                        iconColor: Colors.green,
-                        onTap: () async {
-                         final result = await Navigator.push(context,
-                          MaterialPageRoute(builder: (context) => const AssetRegistrationPage()));
-                            if (result == true) {
-                            // REFRESH DASHBOARDNYA!
-                            setState(() {
-                              _futureDashboard = fetchDashboard();
-                            });
-                          }
-                        }
-                      ),
-                      _buildQuickMenu(
-                        icon: Icons.swap_horiz, 
-                        label: "Mutasi", 
-                        color: const Color(0xFFF3E5F5), 
-                        iconColor: Colors.purple,
-                        onTap: () {
-                          Navigator.push(
-                            context, 
-                            MaterialPageRoute(builder: (context) => const BastFormScreen())
-                          );
-                        }
-                      ),
-                      _buildQuickMenu(
-                        icon: Icons.insert_chart_outlined_outlined, 
-                        label: "Laporan", 
-                        color: const Color(0xFFFFF3E0), 
-                        iconColor: Colors.orange
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 35),
-                  Text("AKTIVITAS TERBARU", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14, letterSpacing: 1.0)),
-                  const SizedBox(height: 15),
-
-                  // LIST AKTIVITAS
-                 // LIST AKTIVITAS (SEKARANG DINAMIS COY)
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 4))],
-                    ),
-                    child: Column(
-                      // Kita Looping datanya pake map()
-                      children: dashboardData.aktivitasTerbaru.map((aktivitas) {
-                        return Column(
-                          children: [
-                            _buildActivityItem(aktivitas.judul, aktivitas.deskripsi, aktivitas.waktu),
-                            // Biar garis bawahnya ilang di list paling terakhir
-                            if (aktivitas != dashboardData.aktivitasTerbaru.last)
-                              const Divider(height: 1, indent: 70),
-                          ],
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                  const SizedBox(height: 100),
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-
-      // TOMBOL TENGAH (SCAN)
-      floatingActionButton: SizedBox(
-        height: 70,
-        width: 70,
+      floatingActionButton: _selectedIndex != 3 ? SizedBox( // Hide button if in profile
+        height: 70, width: 70,
         child: FloatingActionButton(
-          onPressed: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const ScanScreen()),
-            );
-          },
+          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const ScanScreen())),
           backgroundColor: const Color(0xFF0087FF),
           shape: const CircleBorder(),
           elevation: 4,
           child: const Icon(Icons.qr_code_scanner, size: 32, color: Colors.white),
         ),
-      ),
+      ) : null,
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
 
-      // BOTTOM NAVIGATION (FOOTER)
       bottomNavigationBar: BottomAppBar(
         shape: const CircularNotchedRectangle(),
         notchMargin: 10,
@@ -297,20 +134,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: <Widget>[
-              Row(
-                children: [
-                  _buildNavItem(icon: Icons.home_filled, label: "Beranda", index: 0),
-                  const SizedBox(width: 30),
-                  _buildNavItem(icon: Icons.inventory_2_outlined, label: "Aset", index: 1),
-                ],
-              ),
-              Row(
-                children: [
-                  _buildNavItem(icon: Icons.swap_horiz, label: "Mutasi", index: 2),
-                  const SizedBox(width: 30),
-                  _buildNavItem(icon: Icons.person_outline, label: "Profil", index: 3),
-                ],
-              ),
+              Row(children: [
+                _buildNavItem(icon: Icons.home_filled, label: "Beranda", index: 0),
+                const SizedBox(width: 30),
+                _buildNavItem(icon: Icons.inventory_2_outlined, label: "Aset", index: 1),
+              ]),
+              Row(children: [
+                _buildNavItem(icon: Icons.swap_horiz, label: "Mutasi", index: 2),
+                const SizedBox(width: 30),
+                _buildNavItem(icon: Icons.person_outline, label: "Profil", index: 3),
+              ]),
             ],
           ),
         ),
@@ -318,48 +151,97 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // --- WIDGET HELPER ---
-  Widget _buildQuickMenu({
-    required IconData icon, 
-    required String label, 
-    required Color color, 
-    required Color iconColor,
-    VoidCallback? onTap, 
-  }) {
-    return GestureDetector( 
-      onTap: onTap,
-      child: Column(
-        children: [
-          Container(
-            width: 65,
-            height: 65,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(18),
+  Widget _buildHomeContent() {
+    return FutureBuilder<DashboardModel>(
+      future: _futureDashboard,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+        if (snapshot.hasError) return const Center(child: Text("Error"));
+        final data = snapshot.data!;
+        return RefreshIndicator(
+          onRefresh: () async { setState(() { _futureDashboard = fetchDashboard(); }); },
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text("Selamat pagi,", style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600])),
+                    Text(data.namaUser, style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold)),
+                  ]),
+                  Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)]), child: const Icon(Icons.notifications_none_outlined, size: 28)),
+                ]),
+                const SizedBox(height: 25),
+                Row(children: [
+                  _buildStatCard("Total Aset", data.totalAset.toString(), const Color(0xFF0087FF), Icons.inventory_2_outlined),
+                  const SizedBox(width: 15),
+                  _buildStatCard("Maintenance", data.perluMaintenance.toString(), Colors.redAccent, Icons.build_outlined),
+                ]),
+                const SizedBox(height: 35),
+                Text("MENU CEPAT", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14)),
+                const SizedBox(height: 15),
+                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  _buildMenu("Scan", Icons.qr_code_scanner, Colors.blue, () => Navigator.push(context, MaterialPageRoute(builder: (context) => const ScanScreen()))),
+                  _buildMenu("Tagging", Icons.add_circle_outline, Colors.green, () async {
+                    final res = await Navigator.push(context, MaterialPageRoute(builder: (context) => const AssetRegistrationPage()));
+                    if (res == true) setState(() { _futureDashboard = fetchDashboard(); });
+                  }),
+                  _buildMenu("Mutasi", Icons.swap_horiz, Colors.purple, () => Navigator.push(context, MaterialPageRoute(builder: (context) => const BastFormScreen()))),
+                  _buildMenu("Laporan", Icons.insert_chart_outlined, Colors.orange, null),
+                ]),
+                const SizedBox(height: 35),
+                Text("AKTIVITAS TERBARU", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14)),
+                const SizedBox(height: 15),
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10)]),
+                  child: Column(children: data.aktivitasTerbaru.map((akt) => ListTile(
+                    leading: const CircleAvatar(backgroundColor: Color(0xFFF0F7FF), child: Icon(Icons.history, color: Colors.blue, size: 20)),
+                    title: Text(akt.judul, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13)),
+                    subtitle: Text(akt.deskripsi, style: GoogleFonts.poppins(fontSize: 11)),
+                    trailing: Text(akt.waktu, style: GoogleFonts.poppins(fontSize: 10, color: Colors.grey)),
+                  )).toList()),
+                ),
+                const SizedBox(height: 100),
+              ],
             ),
-            child: Icon(icon, color: iconColor, size: 28),
           ),
-          const SizedBox(height: 8),
-          Text(
-            label,
-            style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w500, color: Colors.black87),
-          ),
-        ],
+        );
+      },
+    );
+  }
+
+  Widget _buildStatCard(String title, String value, Color color, IconData icon) {
+    bool isBlue = color == const Color(0xFF0087FF);
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isBlue ? color : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: !isBlue ? Border.all(color: Colors.grey[200]!) : null,
+          boxShadow: [if(isBlue) BoxShadow(color: color.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 5))],
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(icon, color: isBlue ? Colors.white : color, size: 24),
+          const SizedBox(height: 12),
+          Text(value, style: GoogleFonts.poppins(fontSize: 28, fontWeight: FontWeight.bold, color: isBlue ? Colors.white : Colors.black)),
+          Text(title, style: GoogleFonts.poppins(fontSize: 11, color: isBlue ? Colors.white70 : Colors.grey)),
+        ]),
       ),
     );
   }
 
-  Widget _buildActivityItem(String title, String subtitle, String time) {
-    return ListTile(
-      leading: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: const BoxDecoration(color: Color(0xFFE3F2FD), shape: BoxShape.circle),
-        child: const Icon(Icons.history_rounded, color: Colors.blue, size: 22),
-      ),
-      title: Text(title, style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14)),
-      subtitle: Text(subtitle, style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600])),
-      trailing: Text(time, style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey[400])),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+  Widget _buildMenu(String label, IconData icon, Color color, VoidCallback? tap) {
+    return GestureDetector(
+      onTap: tap,
+      child: Column(children: [
+        Container(width: 60, height: 60, decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(15)), child: Icon(icon, color: color, size: 26)),
+        const SizedBox(height: 8),
+        Text(label, style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.w500)),
+      ]),
     );
   }
 
@@ -367,30 +249,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final isSelected = _selectedIndex == index;
     return GestureDetector(
       onTap: () {
-        if (index == 1) {
-          Navigator.push(context, MaterialPageRoute(builder: (context) => const AssetListScreen()));
-        } else if (index == 2) {
-          Navigator.push(context, MaterialPageRoute(builder: (context) => const BastFormScreen()));
-        } else {
-          setState(() {
-            _selectedIndex = index;
-          });
-        }
+        if (index == 1) Navigator.push(context, MaterialPageRoute(builder: (context) => const AssetListScreen()));
+        else if (index == 2) Navigator.push(context, MaterialPageRoute(builder: (context) => const BastFormScreen()));
+        else setState(() => _selectedIndex = index);
       },
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, color: isSelected ? const Color(0xFF0087FF) : Colors.grey, size: 26),
-          Text(
-            label,
-            style: GoogleFonts.poppins(
-              fontSize: 10,
-              color: isSelected ? const Color(0xFF0087FF) : Colors.grey,
-              fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-            ),
-          ),
-        ],
-      ),
+      child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Icon(icon, color: isSelected ? const Color(0xFF0087FF) : Colors.grey, size: 26),
+        Text(label, style: GoogleFonts.poppins(fontSize: 10, color: isSelected ? const Color(0xFF0087FF) : Colors.grey, fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal)),
+      ]),
     );
   }
 }

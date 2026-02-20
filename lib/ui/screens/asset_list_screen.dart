@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'asset_detail_screen.dart';
-import '../../models/barang_model.dart';
-import '../../services/api_services.dart';
 import 'dart:convert';
+
+import '../../services/api_services.dart';
+import '../../models/barang_model.dart'; 
+import 'asset_detail_screen.dart';
 
 class AssetListScreen extends StatefulWidget {
   const AssetListScreen({super.key});
@@ -14,190 +15,212 @@ class AssetListScreen extends StatefulWidget {
 
 class _AssetListScreenState extends State<AssetListScreen> {
   final ApiService _apiService = ApiService();
-  late Future<List<BarangModel>> _futureBarang;
+  late Future<List<BarangModel>> _futureAset;
 
   @override
   void initState() {
     super.initState();
-    // Panggil API pas halaman pertama kali dibuka
-    _futureBarang = fetchBarang();
+    _futureAset = fetchDaftarAset();
   }
 
-  Future<List<BarangModel>> fetchBarang() async {
+  // Fungsi buat bersihin JSON kotor (biasanya ada sampah teks di awal/akhir)
+  dynamic _cleanAndDecode(dynamic data) {
+    if (data == null) return null;
+    if (data is Map || data is List) return data;
+    try {
+      String raw = data.toString().trim();
+      int lastBrace = raw.lastIndexOf('}');
+      int lastBracket = raw.lastIndexOf(']');
+      int cutIndex = (lastBrace > lastBracket) ? lastBrace : lastBracket;
+      if (cutIndex != -1) raw = raw.substring(0, cutIndex + 1);
+      return jsonDecode(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  Future<List<BarangModel>> fetchDaftarAset() async {
     try {
       final response = await _apiService.getBarang();
-      dynamic responseData = response.data;
+      dynamic responseData = _cleanAndDecode(response.data);
 
-       print("=== HASIL RAW DARI API ===");
-       print(response.data);
-       print("=== TIPE DATANYA ===");
-       print(response.data.runtimeType);   
+      List<BarangModel> tempItems = [];
 
-      if(responseData is String) {
-        responseData = jsonDecode(responseData);
+      if (responseData != null && responseData is Map) {
+        var barangData = responseData['barang'];
+        List<dynamic> listRaw = [];
+        
+        if (barangData != null && barangData['data'] is List) {
+          listRaw = barangData['data'];
+        } else if (responseData['data'] is List) {
+          listRaw = responseData['data'];
+        }
+
+        // Convert raw JSON ke Model biar logikanya seragam
+        tempItems = listRaw.map((e) => BarangModel.fromJson(e)).toList();
       }
-
-      List<dynamic> dataList;
-
-      if(responseData is List) {
-        dataList = responseData;
-      } else {
-        dataList =responseData['data'];
-      }
-       return dataList.map((json) => BarangModel.fromJson(json)).toList();
+      return tempItems;
     } catch (e) {
-      throw Exception('Gagal nyedot data: $e');
+      print("Error list: $e");
+      return [];
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FA),
+      backgroundColor: const Color(0xFFF1F5F9), // Warna background abu soft biar card keliatan
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF8F9FA),
+        backgroundColor: Colors.white,
         elevation: 0,
-        centerTitle: false,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black),
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
-          "Items",
-          style: GoogleFonts.poppins(
-            color: Colors.black,
-            fontWeight: FontWeight.bold,
-            fontSize: 20,
-          ),
+          "Daftar Aset", 
+          style: GoogleFonts.poppins(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.search, color: Colors.black, size: 28),
-            onPressed: () {},
-          ),
-          const SizedBox(width: 10),
+          IconButton(onPressed: () {}, icon: const Icon(Icons.search, color: Colors.black)),
         ],
       ),
       body: FutureBuilder<List<BarangModel>>(
-        future: _futureBarang,
+        future: _futureAset,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          } else if (snapshot.hasError) {
-            return Center(child: Text('Error bos: ${snapshot.error}'));
-          } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-            return const Center(child: Text('Data kosong melompong.'));
+            return const Center(child: CircularProgressIndicator(color: Color(0xFF0087FF)));
+          }
+          
+          final list = snapshot.data ?? [];
+          if (list.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.inventory_2_outlined, size: 80, color: Colors.grey[300]),
+                  const SizedBox(height: 16),
+                  Text("Belum ada aset terdaftar Tuan.", style: GoogleFonts.poppins(color: Colors.grey)),
+                ],
+              ),
+            );
           }
 
-          final listBarang = snapshot.data!;
+          return RefreshIndicator(
+            onRefresh: () async {
+              setState(() { _futureAset = fetchDaftarAset(); });
+            },
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+              itemCount: list.length,
+              itemBuilder: (context, index) {
+                final item = list[index];
+                bool isLokasi = item.statusPenguasaan == 'lokasi';
 
-          return ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-            itemCount: listBarang.length,
-            itemBuilder: (context, index) {
-              // Sekarang item tipe datanya BarangModel
-              final item = listBarang[index]; 
-
-              return GestureDetector(
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => AssetDetailScreen(
-                          asset: item,
-                      ),
+                return GestureDetector(
+                  onTap: () async {
+                    final res = await Navigator.push(
+                      context, 
+                      MaterialPageRoute(builder: (context) => AssetDetailScreen(asset: item))
+                    );
+                    if (res == true) setState(() { _futureAset = fetchDaftarAset(); });
+                  },
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 15),
+                    padding: const EdgeInsets.all(15),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(15),
+                      boxShadow: [
+                        BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 4))
+                      ],
                     ),
-                  );
-                },
-                child: Container(
-                  margin: const EdgeInsets.only(bottom: 15),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(12.0),
                     child: Row(
                       children: [
-                        // Gambar Produk (Sementara pake errorBuilder / dummy, karena di ERD lu kaga ada field foto barang)
+                        // Kotak Icon Biru (Sesuai Screenshot)
                         Container(
-                          width: 80,
-                          height: 80,
+                          width: 50,
+                          height: 50,
                           decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(15),
-                            color: Colors.grey[100],
+                            color: const Color(0xFFEBF5FF),
+                            borderRadius: BorderRadius.circular(12),
                           ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(15),
-                            child: Image.asset(
-                              'assets/images/placeholder.png', // Ganti kalo lu punya gambar default
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error, stackTrace) {
-                                return const Icon(Icons.image_not_supported, color: Colors.grey, size: 40);
-                              },
-                            ),
-                          ),
+                          child: const Icon(Icons.inventory_2_outlined, color: Color(0xFF0087FF), size: 24),
                         ),
-                        
                         const SizedBox(width: 15),
-
-                        // Text Info
+                        
+                        // Info Barang
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                item.namaBarang, // DARI API
-                                style: GoogleFonts.poppins(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.black,
-                                ),
+                                item.namaBarang.toUpperCase(), 
+                                style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
-                              const SizedBox(height: 5),
-                              Text(
-                                item.kodeBarcode, // DARI API
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  color: Colors.grey[500],
-                                ),
+                              Row(
+                                children: [
+                                  const Icon(Icons.qr_code, size: 12, color: Colors.grey),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    item.kodeBarcode, 
+                                    style: GoogleFonts.sourceCodePro(fontSize: 12, color: Colors.grey[600]),
+                                  ),
+                                ],
                               ),
+                              const SizedBox(height: 8),
+                              
+                              // Badges (Kondisi & Tipe Aset)
+                              Row(
+                                children: [
+                                  // Badge Kondisi (Greenish)
+                                  _buildBadge(
+                                    item.kondisi, 
+                                    item.kondisi.toLowerCase().contains('baik') ? Colors.green : Colors.orange
+                                  ),
+                                  const SizedBox(width: 8),
+                                  
+                                  // Badge Tipe Aset (Dinamis: LOKASI vs PERSONAL)
+                                  _buildBadge(
+                                    item.statusPenguasaan.toUpperCase(), 
+                                    isLokasi ? const Color(0xFF0087FF) : Colors.grey[600]!
+                                  ),
+                                ],
+                              )
                             ],
                           ),
                         ),
-
-                        // Jumlah Stock
-                        Column(
-                          mainAxisAlignment: MainAxisAlignment.start,
-                          children: [
-                            Text(
-                              item.jumlahBarang.toString(), // DARI API (dijadiin string)
-                              style: GoogleFonts.poppins(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                color: const Color(0xFF0D47A1),
-                              ),
-                            ),
-                            const SizedBox(height: 20), 
-                          ],
-                        ),
+                        const Icon(Icons.chevron_right, color: Colors.grey),
                       ],
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           );
         },
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => Navigator.pop(context),
+        backgroundColor: const Color(0xFF0087FF),
+        child: const Icon(Icons.add, color: Colors.white),
+      ),
+    );
+  }
+
+  Widget _buildBadge(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Text(
+        text, 
+        style: GoogleFonts.poppins(fontSize: 10, fontWeight: FontWeight.bold, color: color)
       ),
     );
   }
