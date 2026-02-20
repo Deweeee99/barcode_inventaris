@@ -1,43 +1,7 @@
 import 'package:flutter/material.dart';
+import '../../services/api_services.dart';
 
-void main() {
-  runApp(const MyApp());
-}
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-        scaffoldBackgroundColor: Colors.white,
-        fontFamily: 'Roboto', // Menggunakan font default yang bersih
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: const Color(0xFFEEEEEE), // Warna abu-abu muda input
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide.none,
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: Colors.transparent),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: Colors.blue, width: 1.5),
-          ),
-          hintStyle: const TextStyle(color: Colors.grey, fontSize: 14),
-        ),
-      ),
-      home: const AssetRegistrationPage(),
-    );
-  }
-}
 
 class AssetRegistrationPage extends StatefulWidget {
   const AssetRegistrationPage({super.key});
@@ -47,8 +11,78 @@ class AssetRegistrationPage extends StatefulWidget {
 }
 
 class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
-  // State untuk menentukan tab yang aktif (Lokasi atau Personal)
+  
+   final ApiService _apiService = ApiService();
+
+//switcher
   bool isLocationAsset = true;
+  bool _isLoading = false;
+
+  //textfield
+  final TextEditingController _barcodeTxt = TextEditingController();
+  final TextEditingController _namaBarangTxt = TextEditingController();
+  final TextEditingController _lokasiPenerimaTxt = TextEditingController();
+
+  //dropdown
+  String _selectedKategori = "Elektronik";
+  String _selectedKondisi = "Baik";
+
+  @override
+  void dispose() {
+    _barcodeTxt.dispose();
+    _namaBarangTxt.dispose();
+    _lokasiPenerimaTxt.dispose();
+    super.dispose();
+  }
+
+  Future<void> _simpanData() async {
+    //biar data ga kosong
+    if (_barcodeTxt.text.isEmpty || _namaBarangTxt.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content:   Text('Nama barang dan barcode wajib di isi !'), backgroundColor: Colors.red)
+      );
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      // 1. Bungkus data dari form jadi format JSON
+      Map<String, dynamic> dataKirim = {
+        "kode_barcode": _barcodeTxt.text,
+        "nama_barang": _namaBarangTxt.text,
+        "kategori": _selectedKategori,
+        "kondisi": _selectedKondisi,
+        "tipe_alokasi": isLocationAsset ? "Lokasi" : "Personal",
+        "lokasi_atau_penerima": _lokasiPenerimaTxt.text,
+      };
+
+      await _apiService.tambahBarang(dataKirim);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Asset baru sukses di daftarkan'), backgroundColor: Colors.green),
+        );
+
+        Navigator.pop(context, true);
+      }
+  } catch (e) {
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Gagal simpan data : $e'), backgroundColor: Colors.red),
+      );
+    }
+  } finally {
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
+    }
+  }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -58,7 +92,7 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.black),
-          onPressed: () {},
+          onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
           'Registrasi Aset Baru',
@@ -104,8 +138,6 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                           border: Border.all(
                             color: Colors.blueAccent.withOpacity(0.5),
                             style: BorderStyle.solid, 
-                            // Catatan: Flutter native tidak punya dotted border bawaan simple, 
-                            // jadi pakai solid border warna biru muda mirip mockup.
                             width: 1.5,
                           ),
                         ),
@@ -161,6 +193,7 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                     children: [
                       Expanded(
                         child: TextField(
+                          controller: _barcodeTxt,
                           decoration: const InputDecoration(
                             hintText: "Scan ID Barcode...",
                             prefixIcon: Icon(Icons.label_outline, color: Colors.grey),
@@ -184,7 +217,9 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                         ),
                         child: IconButton(
                           icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
-                          onPressed: () {},
+                          onPressed: () {
+                            _barcodeTxt.text = "BRC-SCANNED-${DateTime.now().second}";
+                          },
                         ),
                       ),
                     ],
@@ -193,9 +228,10 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
 
                   // INFORMASI BARANG
                   _buildLabel("INFORMASI BARANG"),
-                  const TextField(
-                    decoration: InputDecoration(
-                      hintText: "Nama Barang (Contoh: Laptop Asus ROG STRIX)",
+                  TextField(
+                    controller: _namaBarangTxt,
+                    decoration: _buildInputDeco(
+                      hint: "Nama Barang (Contoh: Laptop Asus ROG STRIX)",
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -210,13 +246,13 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                           children: [
                             _buildLabel("KATEGORI"),
                             DropdownButtonFormField<String>(
-                              value: "Elektronik",
+                              value: _selectedKategori,
                               decoration: const InputDecoration(),
                               icon: const Icon(Icons.keyboard_arrow_down),
                               items: ["Elektronik", "Furniture"]
-                                  .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                                  .map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 14))))
                                   .toList(),
-                              onChanged: (v) {},
+                              onChanged: (v) {setState(() => _selectedKategori = v!);},
                             ),
                           ],
                         ),
@@ -229,8 +265,8 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                           children: [
                             _buildLabel("KONDISI"),
                             DropdownButtonFormField<String>(
-                              value: "Baik",
-                              decoration: const InputDecoration(),
+                              value: _selectedKondisi,
+                              decoration: _buildInputDeco(),
                               icon: const Icon(Icons.keyboard_arrow_down),
                               items: ["Baik", "Rusak Ringan", "Rusak Berat"]
                                   .map((e) => DropdownMenuItem(
@@ -244,7 +280,7 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                                         ),
                                       ))
                                   .toList(),
-                              onChanged: (v) {},
+                              onChanged: (v) { setState(() => _selectedKondisi = v!);},
                             ),
                           ],
                         ),
@@ -278,14 +314,10 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                   Container(
                     width: double.infinity,
                     height: 50,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEEEEEE),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                    decoration: BoxDecoration(color: const Color(0xFFEEEEEE), borderRadius: BorderRadius.circular(12)),
                     padding: const EdgeInsets.all(4),
                     child: Row(
                       children: [
-                        // Tab Aset Lokasi
                         Expanded(
                           child: GestureDetector(
                             onTap: () => setState(() => isLocationAsset = true),
@@ -293,33 +325,19 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                               decoration: BoxDecoration(
                                 color: isLocationAsset ? Colors.white : Colors.transparent,
                                 borderRadius: BorderRadius.circular(10),
-                                boxShadow: isLocationAsset
-                                    ? [const BoxShadow(color: Colors.black12, blurRadius: 4)]
-                                    : [],
+                                boxShadow: isLocationAsset ? [const BoxShadow(color: Colors.black12, blurRadius: 4)] : [],
                               ),
                               child: Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(
-                                    Icons.business, // Icon gedung/kantor
-                                    color: isLocationAsset ? Colors.blue : Colors.grey,
-                                    size: 20,
-                                  ),
+                                  Icon(Icons.business, color: isLocationAsset ? Colors.blue : Colors.grey, size: 20),
                                   const SizedBox(width: 8),
-                                  Text(
-                                    "Aset Lokasi",
-                                    style: TextStyle(
-                                      color: isLocationAsset ? Colors.blue : Colors.grey,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13,
-                                    ),
-                                  ),
+                                  Text("Aset Lokasi", style: TextStyle(color: isLocationAsset ? Colors.blue : Colors.grey, fontWeight: FontWeight.bold, fontSize: 13)),
                                 ],
                               ),
                             ),
                           ),
                         ),
-                        // Tab Aset Personal
                         Expanded(
                           child: GestureDetector(
                             onTap: () => setState(() => isLocationAsset = false),
@@ -327,27 +345,14 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                               decoration: BoxDecoration(
                                 color: !isLocationAsset ? Colors.white : Colors.transparent,
                                 borderRadius: BorderRadius.circular(10),
-                                boxShadow: !isLocationAsset
-                                    ? [const BoxShadow(color: Colors.black12, blurRadius: 4)]
-                                    : [],
+                                boxShadow: !isLocationAsset ? [const BoxShadow(color: Colors.black12, blurRadius: 4)] : [],
                               ),
                               child: Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(
-                                    Icons.person_outline,
-                                    color: !isLocationAsset ? Colors.blue : Colors.grey,
-                                    size: 20,
-                                  ),
+                                  Icon(Icons.person_outline, color: !isLocationAsset ? Colors.blue : Colors.grey, size: 20),
                                   const SizedBox(width: 8),
-                                  Text(
-                                    "Aset Personal",
-                                    style: TextStyle(
-                                      color: !isLocationAsset ? Colors.blue : Colors.grey,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13,
-                                    ),
-                                  ),
+                                  Text("Aset Personal", style: TextStyle(color: !isLocationAsset ? Colors.blue : Colors.grey, fontWeight: FontWeight.bold, fontSize: 13)),
                                 ],
                               ),
                             ),
@@ -362,19 +367,15 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                   // DYNAMIC FORM FIELD BERDASARKAN TIPE ALOKASI
                   if (isLocationAsset) ...[
                     _buildLabel("Lokasi Penempatan Baru"),
-                    const TextField(
-                      decoration: InputDecoration(
-                        hintText: "Isi Lokasi",
-                        prefixIcon: Icon(Icons.description_outlined, color: Colors.grey),
-                      ),
+                    TextField(
+                      controller: _lokasiPenerimaTxt, // <-- Pasang Controller di mari
+                      decoration: _buildInputDeco(hint: "Isi Lokasi", icon: Icons.location_on_outlined),
                     ),
                   ] else ...[
                     _buildLabel("Nama Penerima Baru"),
-                    const TextField(
-                      decoration: InputDecoration(
-                        hintText: "Isi Penerima",
-                        prefixIcon: Icon(Icons.description_outlined, color: Colors.grey),
-                      ),
+                    TextField(
+                      controller: _lokasiPenerimaTxt, // <-- Pasang Controller buat nama
+                      decoration: _buildInputDeco(hint: "Isi Penerima", icon: Icons.person_outline),
                     ),
                   ],
 
@@ -393,20 +394,21 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
           border: Border(top: BorderSide(color: Colors.black12)),
         ),
         child: ElevatedButton.icon(
-          onPressed: () {},
+          onPressed: _isLoading ? null : _simpanData, // Kalo loading gabisa dipencet
           style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFFE0E0E0), // Warna tombol disable/grey
-            foregroundColor: const Color(0xFF9E9E9E), // Warna text/icon grey
-            elevation: 0,
+            backgroundColor: const Color(0xFF0087FF), // Balikin ke biru biar nyala
+            foregroundColor: Colors.white, 
+            elevation: 2,
             padding: const EdgeInsets.symmetric(vertical: 16),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            disabledBackgroundColor: Colors.grey[300], // Warna pas loading
           ),
-          icon: const Icon(Icons.save),
-          label: const Text(
-            "Simpan & Cetak Label",
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          icon: _isLoading 
+              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
+              : const Icon(Icons.save),
+          label: Text(
+            _isLoading ? "Nyimpen..." : "Simpan & Cetak Label",
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
         ),
       ),
@@ -425,6 +427,20 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
           color: Colors.black87,
         ),
       ),
+    );
+  }
+
+  InputDecoration _buildInputDeco({String? hint, IconData? icon}) {
+    return InputDecoration(
+      hintText: hint,
+      prefixIcon: icon != null ? Icon(icon, color: Colors.grey) : null,
+      filled: true,
+      fillColor: const Color(0xFFEEEEEE),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.transparent)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Colors.blue, width: 1.5)),
+      hintStyle: const TextStyle(color: Colors.grey, fontSize: 14),
     );
   }
 }

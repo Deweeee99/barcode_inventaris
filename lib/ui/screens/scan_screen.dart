@@ -190,25 +190,25 @@ class _ScanScreenState extends State<ScanScreen> {
               },
               child: Text("Scan Lagi", style: GoogleFonts.poppins(color: Colors.grey)),
             ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(context); 
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => AssetDetailScreen(
-                      assetName: "Aset Hasil Scan", 
-                      assetId: code,                
-                    ),
-                  ),
-                );
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF0087FF),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              child: Text("Lihat Detail", style: GoogleFonts.poppins(color: Colors.white)),
-            ),
+            // ElevatedButton(
+            //   onPressed: () {
+            //     Navigator.pop(context); 
+            //     Navigator.pushReplacement(
+            //       context,
+            //       MaterialPageRoute(
+            //         builder: (context) => AssetDetailScreen(
+            //           assetName: "Aset Hasil Scan", 
+            //           assetId: code,                
+            //         ),
+            //       ),
+            //     );
+            //   },
+            //   style: ElevatedButton.styleFrom(
+            //     backgroundColor: const Color(0xFF0087FF),
+            //     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            //   ),
+            //   child: Text("Lihat Detail", style: GoogleFonts.poppins(color: Colors.white)),
+            // ),
           ],
         );
       },

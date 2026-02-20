@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'asset_detail_screen.dart';
 import '../../models/barang_model.dart';
 import '../../services/api_services.dart';
+import 'dart:convert';
 
 class AssetListScreen extends StatefulWidget {
   const AssetListScreen({super.key});
@@ -25,8 +26,25 @@ class _AssetListScreenState extends State<AssetListScreen> {
   Future<List<BarangModel>> fetchBarang() async {
     try {
       final response = await _apiService.getBarang();
-      List<dynamic> data = response.data['data']; 
-      return data.map((json) => BarangModel.fromJson(json)).toList();
+      dynamic responseData = response.data;
+
+       print("=== HASIL RAW DARI API ===");
+       print(response.data);
+       print("=== TIPE DATANYA ===");
+       print(response.data.runtimeType);   
+
+      if(responseData is String) {
+        responseData = jsonDecode(responseData);
+      }
+
+      List<dynamic> dataList;
+
+      if(responseData is List) {
+        dataList = responseData;
+      } else {
+        dataList =responseData['data'];
+      }
+       return dataList.map((json) => BarangModel.fromJson(json)).toList();
     } catch (e) {
       throw Exception('Gagal nyedot data: $e');
     }
@@ -60,7 +78,6 @@ class _AssetListScreenState extends State<AssetListScreen> {
           const SizedBox(width: 10),
         ],
       ),
-      // BUNGKUS PAKE FUTURE BUILDER
       body: FutureBuilder<List<BarangModel>>(
         future: _futureBarang,
         builder: (context, snapshot) {
@@ -72,7 +89,6 @@ class _AssetListScreenState extends State<AssetListScreen> {
             return const Center(child: Text('Data kosong melompong.'));
           }
 
-          // Dapet nih data dari API-nya
           final listBarang = snapshot.data!;
 
           return ListView.builder(
@@ -88,9 +104,7 @@ class _AssetListScreenState extends State<AssetListScreen> {
                     context,
                     MaterialPageRoute(
                       builder: (context) => AssetDetailScreen(
-                        // Ganti dari map jadi property object
-                        assetName: item.namaBarang, 
-                        assetId: item.kodeBarcode, 
+                          asset: item,
                       ),
                     ),
                   );
