@@ -3,7 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 // Import halaman Login yang sudah kita buat
 // Pastikan folder kamu sesuai (lib/ui/screens/login_screen.dart)
-import 'ui/screens/login_screens.dart';
+import 'ui/screens/login_screen.dart';
 
 void main() {
   runApp(const MyApp());

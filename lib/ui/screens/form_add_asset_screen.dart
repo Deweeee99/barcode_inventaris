@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart'; 
+import 'package:image_picker/image_picker.dart';
+import 'dart:io';
+
 import '../../services/api_services.dart'; 
 
 class AssetRegistrationPage extends StatefulWidget {
@@ -12,22 +15,26 @@ class AssetRegistrationPage extends StatefulWidget {
 class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
   final ApiService _apiService = ApiService();
 
-  bool isLocationAsset = true;
   bool _isLoading = false; 
   bool _isLoadingKontrak = true; 
 
   // --- CONTROLLER ---
-  final TextEditingController _barcodeCtrl = TextEditingController();
   final TextEditingController _namaBarangCtrl = TextEditingController();
   final TextEditingController _jumlahBarangCtrl = TextEditingController(text: "1"); 
   final TextEditingController _spekCtrl = TextEditingController();
-  final TextEditingController _lokasiPenerimaCtrl = TextEditingController();
 
+  // Kategori disesuaikan persis dengan in: di Laravel
   String _selectedKategori = "Elektronik";
+  final List<String> _listKategori = [
+    'Elektronik', 'Furnitur', 'Jaringan', 'Kendaraan', 'Peralatan Kantor', 'Lainnya'
+  ];
   
-  // --- PERBAIKAN: Ubah jadi String biar kaga bentrok sama data JSON Backend ---
   String? _selectedKontrakId; 
   List<dynamic> _listKontrak = []; 
+
+  // --- JURUS MULTI FOTO ---
+  List<XFile> _selectedImages = [];
+  final ImagePicker _picker = ImagePicker();
 
   @override
   void initState() {
@@ -60,25 +67,34 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
         });
       }
     } catch (e) {
-      print("Error tarik kontrak: $e");
+      debugPrint("Error tarik kontrak: $e");
       if (mounted) setState(() => _isLoadingKontrak = false);
     }
   }
 
   @override
   void dispose() {
-    _barcodeCtrl.dispose();
     _namaBarangCtrl.dispose();
     _jumlahBarangCtrl.dispose();
     _spekCtrl.dispose();
-    _lokasiPenerimaCtrl.dispose();
     super.dispose();
   }
 
+  Future<void> _pickMultiImage() async {
+    try {
+      final List<XFile> images = await _picker.pickMultiImage(imageQuality: 70);
+      if (images.isNotEmpty) {
+        setState(() => _selectedImages.addAll(images));
+      }
+    } catch (e) {
+      debugPrint("Gagal buka galeri: $e");
+    }
+  }
+
   Future<void> _simpanData() async {
-    if (_namaBarangCtrl.text.isEmpty || _barcodeCtrl.text.isEmpty) {
+    if (_namaBarangCtrl.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nama barang sama barcode wajib diisi bos!'), backgroundColor: Colors.red),
+        const SnackBar(content: Text('Nama barang wajib diisi bos!'), backgroundColor: Colors.red),
       );
       return;
     }
@@ -93,41 +109,24 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
     setState(() => _isLoading = true);
 
     try {
-      String inputPenerima = _lokasiPenerimaCtrl.text.trim();
       int jumlah = int.tryParse(_jumlahBarangCtrl.text.trim()) ?? 1;
-      
-      // Kembalikan ID Kontrak ke Integer pas mau dikirim
       int idKontrakDikirim = int.tryParse(_selectedKontrakId!) ?? 1;
 
+      // --- PERBAIKAN: Payload disamain persis sama Laravel temen lu ---
+      // Kaga ada lagi kirim status_penguasaan, lokasi_fisik, atau NIP!
       Map<String, dynamic> dataKirim = {
         "id_kontrak": idKontrakDikirim, 
-        "id_kategori": _selectedKategori == "Elektronik" ? 1 : 2,
-        "kode_barcode": _barcodeCtrl.text,
+        "kategori": _selectedKategori, 
         "nama_barang": _namaBarangCtrl.text,
         "spesifikasi": _spekCtrl.text.isEmpty ? "-" : _spekCtrl.text,
         "jumlah_barang": jumlah, 
-        "status_penguasaan": isLocationAsset ? "lokasi" : "personal",
-        "kondisi": "Baik", 
-        "status_kondisi": "Baik", 
       };
 
-      if (isLocationAsset) {
-        if (inputPenerima.isEmpty) throw Exception("Lokasi fisik wajib diisi!");
-        dataKirim["lokasi_fisik"] = inputPenerima;
-        dataKirim["id_karyawan_pemegang"] = null;
-        dataKirim["nip"] = null;
-      } else {
-        if (inputPenerima.isEmpty) throw Exception("NIP Penerima kaga boleh kosong!");
-        dataKirim["id_karyawan_pemegang"] = int.tryParse(inputPenerima) ?? inputPenerima; 
-        dataKirim["nip"] = inputPenerima; 
-        dataKirim["lokasi_fisik"] = null;
-      }
-
-      await _apiService.tambahBarang(dataKirim);
+      await _apiService.tambahBarang(dataKirim, multiFoto: _selectedImages);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Cihuy! Aset baru udah kedaftar Tuan!'), backgroundColor: Colors.green),
+          const SnackBar(content: Text('Cihuy! Aset berhasil didaftarkan dan menunggu proses BAST!'), backgroundColor: Colors.green),
         );
         Navigator.pop(context, true); 
       }
@@ -181,11 +180,34 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Bagian Foto (Dummy)
+            // INFO BOX WORKFLOW BARU
+            Container(
+              margin: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.blue.withOpacity(0.3)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.blue, size: 24),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      "Aset yang diregistrasi akan otomatis berstatus 'Menunggu Serah Terima'. Lakukan serah terima di menu Mutasi/BAST.",
+                      style: TextStyle(color: Colors.blue, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Bagian Upload Foto
             Container(
               width: double.infinity,
               color: const Color(0xFFF5F6F8),
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -193,31 +215,51 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                     children: [
                       Icon(Icons.image_outlined, size: 20, color: Colors.black87),
                       SizedBox(width: 8),
-                      Text("Foto Fisik Aset", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                      Text("Foto Fisik Aset (Bisa Lebih Dari 1)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                     ],
                   ),
                   const SizedBox(height: 12),
-                  Row(
+                  Wrap(
+                    spacing: 10, runSpacing: 10,
                     children: [
-                      Container(
-                        width: 100,
-                        height: 100,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFEFF6FF),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 1.5),
-                        ),
-                        child: const Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.camera_alt_outlined, color: Colors.blue),
-                            SizedBox(height: 8),
-                            Text("Ambil Foto", style: TextStyle(color: Colors.blue, fontSize: 12, fontWeight: FontWeight.bold))
-                          ],
+                      GestureDetector(
+                        onTap: _pickMultiImage,
+                        child: Container(
+                          width: 80, height: 80,
+                          decoration: BoxDecoration(
+                            color: Colors.blue.withOpacity(0.1), 
+                            borderRadius: BorderRadius.circular(10), 
+                            border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 1.5)
+                          ),
+                          child: const Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.add_a_photo, color: Colors.blue),
+                              SizedBox(height: 5),
+                              Text("Tambah", style: TextStyle(color: Colors.blue, fontSize: 10, fontWeight: FontWeight.bold))
+                            ],
+                          ),
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      Text("Belum ada foto", style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+                      ..._selectedImages.asMap().entries.map((entry) {
+                        int idx = entry.key;
+                        XFile img = entry.value;
+                        return Stack(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(10), 
+                              child: Image.file(File(img.path), width: 80, height: 80, fit: BoxFit.cover)
+                            ),
+                            Positioned(
+                              right: -5, top: -5, 
+                              child: IconButton(
+                                icon: const Icon(Icons.cancel, color: Colors.redAccent, size: 20), 
+                                onPressed: () => setState(() => _selectedImages.removeAt(idx))
+                              )
+                            )
+                          ],
+                        );
+                      }),
                     ],
                   ),
                 ],
@@ -229,7 +271,6 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // --- DROPDOWN KONTRAK (UDAH DI-UPGRADE) ---
                   _buildLabel("NOMOR KONTRAK / PO"),
                   _isLoadingKontrak 
                     ? const Center(child: CircularProgressIndicator())
@@ -242,45 +283,16 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                             initialValue: _selectedKontrakId,
                             decoration: _buildInputDeco(hint: "-- Pilih Kontrak Aktif --", icon: Icons.description_outlined),
                             items: _listKontrak.map((k) {
-                              String namaKontrak = k['no_kontrak']?.toString() ?? k['nama_kontrak']?.toString() ?? 'Kontrak ${k['id']}';
-                              // ID-nya kita paksa jadi String biar kaga bikin error Dropdown
+                              String namaKontrak = k['no_kontrak']?.toString() ?? k['nama_kontrak']?.toString() ?? 'Kontrak ${k['id_kontrak']}';
                               return DropdownMenuItem<String>(
-                                value: k['id'].toString(), 
+                                value: k['id_kontrak'].toString(), 
                                 child: Text(namaKontrak, style: const TextStyle(fontSize: 14)),
                               );
                             }).toList(),
                             onChanged: (v) { setState(() => _selectedKontrakId = v); },
                           ),
+                  
                   const SizedBox(height: 16),
-
-                  _buildLabel("ID / TAG BARCODE"),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _barcodeCtrl, 
-                          decoration: _buildInputDeco(hint: "Scan ID Barcode...", icon: Icons.label_outline),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Container(
-                        height: 50,
-                        width: 50,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF2F66D6),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: IconButton(
-                          icon: const Icon(Icons.qr_code_scanner, color: Colors.white),
-                          onPressed: () {
-                            _barcodeCtrl.text = "BRC-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}";
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-
                   _buildLabel("NAMA BARANG"),
                   TextField(controller: _namaBarangCtrl, decoration: _buildInputDeco(hint: "Contoh: Laptop Asus ROG")),
                   const SizedBox(height: 16),
@@ -311,7 +323,7 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                             DropdownButtonFormField<String>(
                               value: _selectedKategori,
                               decoration: _buildInputDeco(),
-                              items: ["Elektronik", "Furniture"].map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 14)))).toList(),
+                              items: _listKategori.map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 13)))).toList(),
                               onChanged: (v) { setState(() => _selectedKategori = v!); },
                             ),
                           ],
@@ -327,39 +339,6 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
                     maxLines: 2,
                     decoration: _buildInputDeco(hint: "Contoh: RAM 16GB, Core i7...", icon: Icons.memory_outlined),
                   ),
-                  const SizedBox(height: 24),
-
-                  const Text("Tipe Alokasi Aset", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  const SizedBox(height: 12),
-                  Container(
-                    width: double.infinity,
-                    height: 50,
-                    decoration: BoxDecoration(color: const Color(0xFFEEEEEE), borderRadius: BorderRadius.circular(12)),
-                    padding: const EdgeInsets.all(4),
-                    child: Row(
-                      children: [
-                        _buildToggle(label: "Aset Lokasi", icon: Icons.business, isSelected: isLocationAsset, onTap: () => setState(() => isLocationAsset = true)),
-                        _buildToggle(label: "Aset Personal", icon: Icons.person_outline, isSelected: !isLocationAsset, onTap: () => setState(() => isLocationAsset = false)),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  if (isLocationAsset) ...[
-                    _buildLabel("LOKASI PENEMPATAN FISIK"),
-                    TextField(
-                      controller: _lokasiPenerimaCtrl, 
-                      decoration: _buildInputDeco(hint: "Contoh: Ruang Rapat Lt. 2", icon: Icons.location_on_outlined),
-                    ),
-                  ] else ...[
-                    _buildLabel("NIP PENERIMA ASET"),
-                    TextField(
-                      controller: _lokasiPenerimaCtrl, 
-                      keyboardType: TextInputType.number, 
-                      decoration: _buildInputDeco(hint: "Masukin NIP (Contoh: 160108)", icon: Icons.badge_outlined),
-                    ),
-                  ],
 
                   const SizedBox(height: 100),
                 ],
@@ -369,43 +348,23 @@ class _AssetRegistrationPageState extends State<AssetRegistrationPage> {
         ),
       ),
       
-      bottomSheet: Container(
+      bottomNavigationBar: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(20),
         decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: Colors.black12))),
-        child: ElevatedButton.icon(
-          onPressed: _isLoading ? null : _simpanData, 
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF0087FF), 
-            foregroundColor: Colors.white, 
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          ),
-          icon: _isLoading 
-              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
-              : const Icon(Icons.save),
-          label: Text(_isLoading ? "Menyimpan..." : "Simpan & Cetak Label", style: const TextStyle(fontWeight: FontWeight.bold)),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildToggle({required String label, required IconData icon, required bool isSelected, required VoidCallback onTap}) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          decoration: BoxDecoration(
-            color: isSelected ? Colors.white : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: isSelected ? Colors.blue : Colors.grey, size: 18),
-              const SizedBox(width: 8),
-              Text(label, style: TextStyle(color: isSelected ? Colors.blue : Colors.grey, fontWeight: FontWeight.bold, fontSize: 12)),
-            ],
+        child: SizedBox(
+          height: 55,
+          child: ElevatedButton.icon(
+            onPressed: _isLoading ? null : _simpanData, 
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0087FF), 
+              foregroundColor: Colors.white, 
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            icon: _isLoading 
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
+                : const Icon(Icons.save),
+            label: Text(_isLoading ? "Menyimpan..." : "Simpan Data Aset", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           ),
         ),
       ),

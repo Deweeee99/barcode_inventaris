@@ -5,6 +5,7 @@ import 'dart:convert';
 import '../../services/api_services.dart';
 import '../../models/barang_model.dart'; 
 import 'asset_detail_screen.dart';
+import 'form_add_asset_screen.dart'; // Pastiin ini di-import Tuan!
 
 class AssetListScreen extends StatefulWidget {
   const AssetListScreen({super.key});
@@ -17,13 +18,23 @@ class _AssetListScreenState extends State<AssetListScreen> {
   final ApiService _apiService = ApiService();
   late Future<List<BarangModel>> _futureAset;
 
+  // --- JURUS FITUR PENCARIAN ---
+  bool _isSearching = false;
+  final TextEditingController _searchCtrl = TextEditingController();
+
   @override
   void initState() {
     super.initState();
     _futureAset = fetchDaftarAset();
   }
 
-  // Fungsi buat bersihin JSON kotor (biasanya ada sampah teks di awal/akhir)
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  // Fungsi buat bersihin JSON kotor (jaga-jaga kalo server ngirim sampah teks)
   dynamic _cleanAndDecode(dynamic data) {
     if (data == null) return null;
     if (data is Map || data is List) return data;
@@ -50,18 +61,19 @@ class _AssetListScreenState extends State<AssetListScreen> {
         var barangData = responseData['barang'];
         List<dynamic> listRaw = [];
         
+        // Nyesuain struktur JSON Pagination Laravel
         if (barangData != null && barangData['data'] is List) {
           listRaw = barangData['data'];
         } else if (responseData['data'] is List) {
           listRaw = responseData['data'];
         }
 
-        // Convert raw JSON ke Model biar logikanya seragam
+        // Convert raw JSON ke Model
         tempItems = listRaw.map((e) => BarangModel.fromJson(e)).toList();
       }
       return tempItems;
     } catch (e) {
-      print("Error list: $e");
+      debugPrint("Error narik list aset: $e");
       return [];
     }
   }
@@ -69,7 +81,7 @@ class _AssetListScreenState extends State<AssetListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF1F5F9), // Warna background abu soft biar card keliatan
+      backgroundColor: const Color(0xFFF1F5F9), 
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
@@ -77,12 +89,36 @@ class _AssetListScreenState extends State<AssetListScreen> {
           icon: const Icon(Icons.arrow_back, color: Colors.black),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text(
-          "Daftar Aset", 
-          style: GoogleFonts.poppins(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)
-        ),
+        // --- LOGIKA APPBAR PENCARIAN ---
+        title: _isSearching 
+            ? TextField(
+                controller: _searchCtrl,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: "Cari nama aset / barcode...",
+                  border: InputBorder.none,
+                  hintStyle: TextStyle(color: Colors.grey, fontSize: 14),
+                ),
+                onChanged: (value) {
+                  setState(() {}); // Trigger rebuild buat filter list
+                },
+              )
+            : Text(
+                "Daftar Aset", 
+                style: GoogleFonts.poppins(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18)
+              ),
         actions: [
-          IconButton(onPressed: () {}, icon: const Icon(Icons.search, color: Colors.black)),
+          IconButton(
+            icon: Icon(_isSearching ? Icons.close : Icons.search, color: Colors.black),
+            onPressed: () {
+              setState(() {
+                _isSearching = !_isSearching;
+                if (!_isSearching) {
+                  _searchCtrl.clear(); // Bersihin teks kalo pencarian ditutup
+                }
+              });
+            },
+          ),
         ],
       ),
       body: FutureBuilder<List<BarangModel>>(
@@ -92,7 +128,17 @@ class _AssetListScreenState extends State<AssetListScreen> {
             return const Center(child: CircularProgressIndicator(color: Color(0xFF0087FF)));
           }
           
-          final list = snapshot.data ?? [];
+          List<BarangModel> list = snapshot.data ?? [];
+
+          // --- LOGIKA FILTER PENCARIAN LOKAL ---
+          if (_searchCtrl.text.isNotEmpty) {
+            String query = _searchCtrl.text.toLowerCase();
+            list = list.where((item) => 
+              item.namaBarang.toLowerCase().contains(query) ||
+              item.kodeBarcode.toLowerCase().contains(query)
+            ).toList();
+          }
+
           if (list.isEmpty) {
             return Center(
               child: Column(
@@ -100,7 +146,10 @@ class _AssetListScreenState extends State<AssetListScreen> {
                 children: [
                   Icon(Icons.inventory_2_outlined, size: 80, color: Colors.grey[300]),
                   const SizedBox(height: 16),
-                  Text("Belum ada aset terdaftar Tuan.", style: GoogleFonts.poppins(color: Colors.grey)),
+                  Text(
+                    _isSearching ? "Aset yang Tuan cari kaga ketemu." : "Belum ada aset terdaftar Tuan.", 
+                    style: GoogleFonts.poppins(color: Colors.grey)
+                  ),
                 ],
               ),
             );
@@ -119,10 +168,12 @@ class _AssetListScreenState extends State<AssetListScreen> {
 
                 return GestureDetector(
                   onTap: () async {
+                    // Masuk ke Detail Aset
                     final res = await Navigator.push(
                       context, 
                       MaterialPageRoute(builder: (context) => AssetDetailScreen(asset: item))
                     );
+                    // Kalo balik bawa pesan true (berarti ada yg di-update), refresh listnya!
                     if (res == true) setState(() { _futureAset = fetchDaftarAset(); });
                   },
                   child: Container(
@@ -137,7 +188,7 @@ class _AssetListScreenState extends State<AssetListScreen> {
                     ),
                     child: Row(
                       children: [
-                        // Kotak Icon Biru (Sesuai Screenshot)
+                        // Kotak Icon Biru
                         Container(
                           width: 50,
                           height: 50,
@@ -175,14 +226,14 @@ class _AssetListScreenState extends State<AssetListScreen> {
                               // Badges (Kondisi & Tipe Aset)
                               Row(
                                 children: [
-                                  // Badge Kondisi (Greenish)
+                                  // Badge Kondisi
                                   _buildBadge(
                                     item.kondisi, 
                                     item.kondisi.toLowerCase().contains('baik') ? Colors.green : Colors.orange
                                   ),
                                   const SizedBox(width: 8),
                                   
-                                  // Badge Tipe Aset (Dinamis: LOKASI vs PERSONAL)
+                                  // Badge Tipe Aset (LOKASI vs PERSONAL)
                                   _buildBadge(
                                     item.statusPenguasaan.toUpperCase(), 
                                     isLokasi ? const Color(0xFF0087FF) : Colors.grey[600]!
@@ -202,8 +253,20 @@ class _AssetListScreenState extends State<AssetListScreen> {
           );
         },
       ),
+      // --- UPDATE: TOMBOL TAMBAH ASET ---
       floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.pop(context),
+        onPressed: () async {
+          // Terbang ke form tambah aset
+          final result = await Navigator.push(
+            context, 
+            MaterialPageRoute(builder: (context) => const AssetRegistrationPage())
+          );
+          
+          // Kalo abis nyimpen aset baru, refresh daftarnya!
+          if (result == true) {
+            setState(() { _futureAset = fetchDaftarAset(); });
+          }
+        },
         backgroundColor: const Color(0xFF0087FF),
         child: const Icon(Icons.add, color: Colors.white),
       ),

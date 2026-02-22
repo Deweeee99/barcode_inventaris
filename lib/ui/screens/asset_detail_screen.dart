@@ -29,7 +29,7 @@ class _AssetDetailScreenState extends State<AssetDetailScreen> {
   bool _isFetchingDetail = true; 
   late BarangModel _currentAsset; 
 
-  final List<String> conditionItems = ['Pilih kondisi...', 'Baik', 'Rusak Ringan', 'Rusak Berat', 'Dalam Perbaikan'];
+  final List<String> conditionItems = ['Baik', 'Rusak Ringan', 'Rusak Berat', 'Dalam Perbaikan'];
   String? selectedCondition;
   String? _initialCondition; 
 
@@ -87,21 +87,21 @@ class _AssetDetailScreenState extends State<AssetDetailScreen> {
     String dbKondisiLower = dbKondisi.toLowerCase();
     
     if (dbKondisiLower.contains('baik')) {
-      selectedCondition = conditionItems[0];
+      _initialCondition = conditionItems[0];
     } else if (dbKondisiLower.contains('ringan')) {
-      selectedCondition = conditionItems[1];
+      _initialCondition = conditionItems[1];
     } else if (dbKondisiLower.contains('berat')) {
-      selectedCondition = conditionItems[2];
+      _initialCondition = conditionItems[2];
     } else if (dbKondisiLower.contains('perbaikan')) {
-      selectedCondition = conditionItems[3];
+      _initialCondition = conditionItems[3];
     } else {
       if (!conditionItems.contains(dbKondisi)) {
         conditionItems.add(dbKondisi);
       }
-      selectedCondition = dbKondisi;
+      _initialCondition = dbKondisi;
     }
-    // Simpan kondisi awal untuk perbandingan aktifasi tombol simpan
-    _initialCondition = selectedCondition; 
+    // FIX: Hapus pengisian selectedCondition di sini!
+    // Biar selectedCondition tetep null dan otomatis nampilin "Pilih kondisi..."
   }
 
   // Buka kamera HP buat ambil foto kondisi
@@ -119,7 +119,8 @@ class _AssetDetailScreenState extends State<AssetDetailScreen> {
     setState(() => _isLoading = true);
     try {
       Map<String, dynamic> dataUpdate = {
-        "status_kondisi": selectedCondition,
+        // FIX: Kalo petugas kaga milih dropdown baru (cuma nambah foto/catatan doang), kita kirim kondisi awalnya
+        "status_kondisi": selectedCondition ?? _initialCondition,
         "catatan": _catatanCtrl.text.trim().isNotEmpty ? _catatanCtrl.text.trim() : "Update kondisi via mobile",
       };
 
@@ -250,7 +251,8 @@ class _AssetDetailScreenState extends State<AssetDetailScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         DropdownButtonFormField<String>(
-                          initialValue: selectedCondition,
+                          value: selectedCondition,
+                          hint: const Text("Pilih kondisi..."), // --- FIX: Tambahin teks hint ini ---
                           decoration: InputDecoration(border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)), contentPadding: const EdgeInsets.symmetric(horizontal: 12)),
                           items: conditionItems.map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 13)))).toList(),
                           onChanged: _isLoading ? null : (v) => setState(() => selectedCondition = v),

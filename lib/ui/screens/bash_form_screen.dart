@@ -24,14 +24,13 @@ class _BastFormScreenState extends State<BastFormScreen> {
   bool _isLoading = false;
 
   String _namaUser = "Memuat...";
-  BarangModel? _selectedAsset;
-  String _jenisMutasi = "Pindah Tangan"; 
+  
+  // Karena backend sekarang support Array, kita bikin list. Walau cuma 1 barang.
+  List<BarangModel> _selectedAssets = [];
+  
+  String _jenisMutasi = "karyawan"; // Sesuai backend: 'karyawan' atau 'lokasi'
   
   final TextEditingController _penerimaCtrl = TextEditingController();
-  final TextEditingController _catatanCtrl = TextEditingController(); 
-
-  final List<String> conditionItems = ['Baik', 'Rusak Ringan', 'Rusak Berat', 'Dalam Perbaikan'];
-  String _selectedCondition = 'Baik';
 
   final SignatureController _signatureController = SignatureController(
     penStrokeWidth: 3,
@@ -45,22 +44,13 @@ class _BastFormScreenState extends State<BastFormScreen> {
     _loadUserData();
     
     if (widget.initialAsset != null) {
-      _selectedAsset = widget.initialAsset;
-      _selectedCondition = _selectedAsset!.kondisi;
-      if (!conditionItems.contains(_selectedCondition)) {
-        _selectedCondition = 'Baik';
-      }
-
-      if (_jenisMutasi == "Pindah Lokasi") {
-        _catatanCtrl.text = "Mutasi dari lokasi lama: ${_selectedAsset!.lokasiFisik}";
-      }
+      _selectedAssets.add(widget.initialAsset!);
     }
   }
 
   @override
   void dispose() {
     _penerimaCtrl.dispose();
-    _catatanCtrl.dispose();
     _signatureController.dispose();
     super.dispose();
   }
@@ -79,41 +69,42 @@ class _BastFormScreenState extends State<BastFormScreen> {
     );
 
     if (barcodeResult != null && barcodeResult is String) {
+      // Cek kalo barangnya udah ada di list
+      if (_selectedAssets.any((asset) => asset.kodeBarcode == barcodeResult)) {
+        _showError("Barang ini udah ada di dalam daftar BAST Tuan!");
+        return;
+      }
+
       setState(() => _isLoading = true);
       try {
-        final response = await _apiService.getBarang();
+        final response = await _apiService.getDetailBarang(barcodeResult);
         var data = response.data;
         if (data is String) data = jsonDecode(data);
         
-        List<dynamic> listRaw = data['barang']?['data'] ?? data['data'] ?? [];
-        
-        var found = listRaw.firstWhere(
-          (element) => element['kode_barcode'] == barcodeResult,
-          orElse: () => null,
-        );
+        // Sesuaikan dengan response getDetailBarang
+        var jsonData = data['data'] ?? data['barang'] ?? data;
 
-        if (found != null) {
+        if (jsonData != null) {
           setState(() {
-            _selectedAsset = BarangModel.fromJson(found);
-            _selectedCondition = _selectedAsset!.kondisi;
-            if (!conditionItems.contains(_selectedCondition)) _selectedCondition = 'Baik';
-
-            if (_jenisMutasi == "Pindah Lokasi") {
-              _catatanCtrl.text = "Mutasi dari lokasi lama: ${_selectedAsset!.lokasiFisik}";
-            }
+            _selectedAssets.add(BarangModel.fromJson(jsonData));
           });
+          if (mounted) {
+             ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Aset $barcodeResult berhasil ditambahkan!'), backgroundColor: Colors.green),
+            );
+          }
         } else {
-          _showError("Aset dengan kode $barcodeResult kaga nemu di database Tuan!");
+          _showError("Aset dengan kode $barcodeResult kaga nemu di database!");
         }
       } catch (e) {
         _showError("Gagal narik data aset: $e");
       } finally {
-        setState(() => _isLoading = false);
+        if (mounted) setState(() => _isLoading = false);
       }
     }
   }
 
-  // JURUS POP-UP ERROR YANG BERSIH & MANUSIAWI
+  // JURUS POP-UP ERROR MANUSIAWI
   void _showError(String msg) {
     showDialog(
       context: context,
@@ -155,19 +146,37 @@ class _BastFormScreenState extends State<BastFormScreen> {
   }
 
   Future<void> _konfirmasiSerahTerima() async {
-    if (_selectedAsset == null) {
-      _showError("Tambahin barangnya dulu lewat Scan Tuan!");
+    if (_selectedAssets.isEmpty) {
+      _showError("Tambahin barangnya dulu lewat Scan!");
       return;
     }
 
     String inputTujuan = _penerimaCtrl.text.trim();
     if (inputTujuan.isEmpty) {
-      _showError(_jenisMutasi == "Pindah Tangan" ? "NIP Penerima wajib diisi!" : "Lokasi tujuan wajib diisi!");
+      _showError(_jenisMutasi == "karyawan" ? "NIP Penerima wajib diisi!" : "Lokasi tujuan wajib diisi!");
       return;
     }
 
+    // --- JURUS KEMBALIKAN VALIDASI LOKAL (ANTI MUTASI KE ORANG/TEMPAT YG SAMA) ---
+    for (var asset in _selectedAssets) {
+      if (_jenisMutasi == "karyawan") {
+        // FIX DEWA: Cek langsung ke nipPemegang, bukan ke nama!
+        if (asset.nipPemegang == inputTujuan) {
+          _showError("Aset ${asset.namaBarang} saat ini udah dipegang sama NIP $inputTujuan, barang tidak bisa di mutasi oleh NIP yang sama.");
+          return;
+        }
+      } else {
+        // Cek apakah lokasi fisik saat ini sama dengan lokasi yang diketik
+        if (asset.lokasiFisik.toLowerCase() == inputTujuan.toLowerCase()) {
+          _showError("Aset ${asset.namaBarang} saat ini udah ada di $inputTujuan, lokasi tidak bisa dipindah ke ruangan yang sama.");
+          return;
+        }
+      }
+    }
+    // --------------------------------------------------------------------------
+
     if (_signatureController.isEmpty) {
-      _showError("Tanda tangan penerima wajib diisi bos!");
+      _showError("Tanda tangan penerima wajib diisi!");
       return;
     }
 
@@ -175,13 +184,14 @@ class _BastFormScreenState extends State<BastFormScreen> {
     try {
       final Uint8List? signatureBytes = await _signatureController.toPngBytes();
 
+      // --- SESUAIKAN SAMA PAYLOAD LARAVEL BARU ---
       Map<String, dynamic> dataUpdate = {
-        "kode_barcode": _selectedAsset!.kodeBarcode,
-        "status_kondisi": _selectedCondition,
-        "catatan": _catatanCtrl.text.isEmpty ? "Mutasi Aset" : _catatanCtrl.text,
+        // Ambil ID dari semua barang yang disekam jadi List
+        "id_barang": _selectedAssets.map((e) => e.id).toList(), 
+        "jenis_transaksi": _jenisMutasi, // 'karyawan' atau 'lokasi'
       };
 
-      if (_jenisMutasi == "Pindah Tangan") {
+      if (_jenisMutasi == "karyawan") {
         dataUpdate["nip_penerima"] = inputTujuan;
       } else {
         dataUpdate["lokasi_tujuan"] = inputTujuan;
@@ -203,27 +213,23 @@ class _BastFormScreenState extends State<BastFormScreen> {
         Navigator.pop(context, true); 
       }
     } catch (e) {
-      // JURUS SAKTI FIX ERROR RED SCREEN / TECHNICAL JARGON
-      String msg = "Gagal simpan BAST Tuan.";
+      String msg = "Gagal simpan BAST!!";
       
       if (e is DioException) {
-        // Ambil error dari interceptor (pesanError yang kita buat di api_services)
         if (e.error != null) {
           msg = e.error.toString();
         }
 
-        // Kalau isinya teks teknis Dio atau 'validateStatus', kita paksa ganti
         if (msg.contains("RequestOptions") || msg.contains("validateStatus") || msg.contains("status code 422")) {
-          msg = "Ada kesalahan data Tuan. Mohon periksa kembali isian form.";
+          msg = "Ada kesalahan data. Mohon periksa kembali isian form.";
         }
         
-        // Logika Deteksi NIP SAMA:
-        // Biasanya kalau NIP sama, backend ngirim info di response data atau error message
         String responseBody = e.response?.data?.toString().toLowerCase() ?? "";
         if (responseBody.contains("penerima") && responseBody.contains("sama") || 
-            responseBody.contains("already assigned") ||
-            inputTujuan == _selectedAsset?.karyawanPemegang) { // Cek lokal juga biar aman
-           msg = "Maaf tidak bisa nginput NIP yang sama dengan orang sebelumnya Tuan!";
+            responseBody.contains("already assigned")) { 
+           msg = "Maaf tidak bisa nginput NIP/Lokasi yang sama dengan posisi sebelumnya!";
+        } else if (responseBody.isNotEmpty) {
+           msg = "Ditolak Server: $responseBody";
         }
       }
       
@@ -268,7 +274,7 @@ class _BastFormScreenState extends State<BastFormScreen> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        "Pastikan barang fisik telah diperiksa oleh penerima sebelum tanda tangan.",
+                        "Pastikan barang fisik telah diperiksa oleh penerima sebelum tanda tangan. Anda bisa scan beberapa barang sekaligus.",
                         style: GoogleFonts.poppins(fontSize: 11, color: Colors.blue[700]),
                       ),
                     ),
@@ -277,63 +283,73 @@ class _BastFormScreenState extends State<BastFormScreen> {
               ),
               const SizedBox(height: 20),
           
-              if (_selectedAsset == null)
-                GestureDetector(
-                  onTap: _isLoading ? null : _handleScanAsset,
-                  child: Container(
-                    height: 100,
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(15),
-                      border: Border.all(color: Colors.grey[300]!, width: 1),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.qr_code_scanner, color: Colors.blue),
-                        const SizedBox(width: 15),
-                        Text("Scan Barcode Barang", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14)),
-                      ],
-                    ),
-                  ),
-                )
-              else
-                Container(
-                  padding: const EdgeInsets.all(15),
+              // TOMBOL SCAN BARANG
+              GestureDetector(
+                onTap: _isLoading ? null : _handleScanAsset,
+                child: Container(
+                  height: 60,
+                  width: double.infinity,
                   decoration: BoxDecoration(
-                    color: Colors.white, 
-                    borderRadius: BorderRadius.circular(15), 
-                    border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                    color: Colors.blue.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(15),
+                    border: Border.all(color: Colors.blue, width: 1.5),
                   ),
                   child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(Icons.inventory_2, color: Colors.blue, size: 30),
+                      const Icon(Icons.qr_code_scanner, color: Colors.blue),
                       const SizedBox(width: 15),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(_selectedAsset!.namaBarang, style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14)),
-                            Text("Barcode: ${_selectedAsset!.kodeBarcode}", style: GoogleFonts.sourceCodePro(fontSize: 11, color: Colors.grey[600])),
-                          ],
-                        ),
-                      ),
-                      if (widget.initialAsset == null)
-                        IconButton(
-                          icon: const Icon(Icons.cancel_outlined, color: Colors.redAccent), 
-                          onPressed: () => setState(() {
-                            _selectedAsset = null;
-                            _catatanCtrl.clear();
-                            _penerimaCtrl.clear();
-                          })
-                        )
+                      Text("Scan Tambah Barang", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.blue)),
                     ],
                   ),
                 ),
+              ),
+              
+              const SizedBox(height: 15),
+
+              // LIST BARANG YANG MAU DI-BAST
+              if (_selectedAssets.isNotEmpty)
+                Column(
+                  children: _selectedAssets.asMap().entries.map((entry) {
+                    int idx = entry.key;
+                    BarangModel asset = entry.value;
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white, 
+                        borderRadius: BorderRadius.circular(12), 
+                        border: Border.all(color: Colors.grey[300]!),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.inventory_2, color: Colors.grey, size: 24),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(asset.namaBarang, style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 13)),
+                                Text("BC: ${asset.kodeBarcode}", style: GoogleFonts.sourceCodePro(fontSize: 10, color: Colors.grey[600])),
+                              ],
+                            ),
+                          ),
+                          // Jangan kasih hapus kalo ini inisial aset dari layar detail
+                          if (widget.initialAsset == null || widget.initialAsset!.id != asset.id)
+                            IconButton(
+                              icon: const Icon(Icons.cancel, color: Colors.redAccent, size: 20), 
+                              onPressed: () => setState(() {
+                                _selectedAssets.removeAt(idx);
+                              })
+                            )
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ),
               
               const SizedBox(height: 25),
-              Text("DETAIL MUTASI & KONDISI", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 11)),
+              Text("DETAIL MUTASI", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 11)),
               const SizedBox(height: 10),
               
               Container(
@@ -342,46 +358,29 @@ class _BastFormScreenState extends State<BastFormScreen> {
                 padding: const EdgeInsets.all(4),
                 child: Row(
                   children: [
-                    _buildToggleItem("Pindah Tangan", Icons.person_outline),
-                    _buildToggleItem("Pindah Lokasi", Icons.location_on_outlined),
+                    _buildToggleItem("Pindah Tangan", Icons.person_outline, "karyawan"),
+                    _buildToggleItem("Pindah Lokasi", Icons.location_on_outlined, "lokasi"),
                   ],
                 ),
               ),
           
               const SizedBox(height: 25),
-              _buildLabel("Pihak Pemberi"),
+              _buildLabel("Pihak Pemberi (Sistem)"),
               TextField(
                 readOnly: true,
                 decoration: _buildInputDeco(hint: "$_namaUser (Saya)", icon: Icons.person_pin_circle_outlined),
               ),
           
               const SizedBox(height: 20),
-              _buildLabel(_jenisMutasi == "Pindah Tangan" ? "NIP Penerima Baru" : "Lokasi Tujuan Baru"),
+              _buildLabel(_jenisMutasi == "karyawan" ? "NIP Penerima Baru" : "Lokasi Tujuan Baru"),
               TextField(
                 key: ValueKey(_jenisMutasi), 
                 controller: _penerimaCtrl,
-                keyboardType: _jenisMutasi == "Pindah Tangan" ? TextInputType.number : TextInputType.text,
+                keyboardType: _jenisMutasi == "karyawan" ? TextInputType.number : TextInputType.text,
                 decoration: _buildInputDeco(
-                  hint: _jenisMutasi == "Pindah Tangan" ? "Masukkan NIP" : "Masukkan Lokasi Baru",
-                  icon: _jenisMutasi == "Pindah Tangan" ? Icons.badge_outlined : Icons.map_outlined,
+                  hint: _jenisMutasi == "karyawan" ? "Masukkan NIP Penerima" : "Masukkan Lokasi Baru",
+                  icon: _jenisMutasi == "karyawan" ? Icons.badge_outlined : Icons.map_outlined,
                 ),
-              ),
-
-              const SizedBox(height: 20),
-              _buildLabel("Kondisi Fisik Saat Serah Terima"),
-              DropdownButtonFormField<String>(
-                value: _selectedCondition,
-                decoration: _buildInputDeco(icon: Icons.offline_bolt_outlined),
-                items: conditionItems.map((e) => DropdownMenuItem(value: e, child: Text(e, style: const TextStyle(fontSize: 13)))).toList(),
-                onChanged: (v) => setState(() => _selectedCondition = v!),
-              ),
-          
-              const SizedBox(height: 20),
-              _buildLabel("Catatan"),
-              TextField(
-                controller: _catatanCtrl, 
-                maxLines: 2,
-                decoration: _buildInputDeco(hint: "Alasan mutasi...", icon: Icons.edit_note_outlined),
               ),
           
               const SizedBox(height: 25),
@@ -413,10 +412,10 @@ class _BastFormScreenState extends State<BastFormScreen> {
           width: double.infinity,
           height: 55,
           child: ElevatedButton.icon(
-            onPressed: (_isLoading || _selectedAsset == null) ? null : _konfirmasiSerahTerima,
+            onPressed: (_isLoading || _selectedAssets.isEmpty) ? null : _konfirmasiSerahTerima,
             style: ElevatedButton.styleFrom(
-              backgroundColor: _selectedAsset == null ? const Color(0xFFF1F1F1) : const Color(0xFF0087FF),
-              foregroundColor: _selectedAsset == null ? Colors.black38 : Colors.white,
+              backgroundColor: _selectedAssets.isEmpty ? const Color(0xFFF1F1F1) : const Color(0xFF0087FF),
+              foregroundColor: _selectedAssets.isEmpty ? Colors.black38 : Colors.white,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
             icon: _isLoading 
@@ -429,19 +428,15 @@ class _BastFormScreenState extends State<BastFormScreen> {
     );
   }
 
-  Widget _buildToggleItem(String label, IconData icon) {
-    bool isSelected = _jenisMutasi == label;
+  // Parameter ke-3 disesuaikan sama kebutuhan backend (karyawan/lokasi)
+  Widget _buildToggleItem(String label, IconData icon, String valueBackend) {
+    bool isSelected = _jenisMutasi == valueBackend;
     return Expanded(
       child: GestureDetector(
         onTap: () {
           setState(() {
-            _jenisMutasi = label;
+            _jenisMutasi = valueBackend;
             _penerimaCtrl.clear();
-            if (_jenisMutasi == "Pindah Lokasi" && _selectedAsset != null) {
-              _catatanCtrl.text = "Mutasi dari lokasi lama: ${_selectedAsset!.lokasiFisik}";
-            } else {
-              _catatanCtrl.clear();
-            }
           });
         },
         child: Container(

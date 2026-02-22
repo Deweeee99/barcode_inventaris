@@ -1,10 +1,12 @@
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:image_picker/image_picker.dart';
 
 class ApiService {
   late Dio _dio;
 
-  final String baseUrl = 'https://3d2c-101-255-138-6.ngrok-free.app/api';
+  // Pastiin baseUrl lu sesuai sama ngrok terbaru lu ya Tuan
+  final String baseUrl = 'https://b541-2001-448a-2074-36ac-5826-4e31-be47-d48c.ngrok-free.app/api';
 
   ApiService() {
     _dio = Dio(BaseOptions(
@@ -43,6 +45,8 @@ class ApiService {
               errors.add("- $key: ${value.join(', ')}");
             });
             pesanError = "Validasi Gagal (422):\n${errors.join('\n')}";
+          } else if (data != null && data['message'] != null) {
+             pesanError = "Gagal (422): ${data['message']}";
           }
         }
 
@@ -69,31 +73,74 @@ class ApiService {
     return await _dio.post('/logout');
   }
 
-  // --- TAMBAHAN BARU: Narik Profil User ---
   Future<Response> getUserProfile() async {
     return await _dio.get('/user');
   }
 
   // ==========================================
-  // 2. ENDPOINT DASHBOARD & BARANG
+  // 2. ENDPOINT BARANG (ASET)
   // ==========================================
   Future<Response> getDashboardSummary() async {
-    return await _dio.get('/barang'); 
+    return await _dio.get('/barang', queryParameters: {'per_page': 5}); 
   }
 
-  Future<Response> getBarang() async {
-    return await _dio.get('/barang'); 
+  Future<Response> getBarang({String? search, String? kategori, String? sort, int? page}) async {
+    Map<String, dynamic> qParams = {};
+    if (search != null && search.isNotEmpty) qParams['search'] = search;
+    if (kategori != null && kategori.isNotEmpty) qParams['kategori'] = kategori;
+    if (sort != null && sort.isNotEmpty) qParams['sort'] = sort;
+    if (page != null) qParams['page'] = page;
+
+    return await _dio.get('/barang', queryParameters: qParams); 
   }
 
-  Future<Response> tambahBarang(Map<String, dynamic> dataKirim) async {
-    return await _dio.post('/barang', data: dataKirim);
+  // --- JURUS FIX: KITA BALIKIN PAKE PATH URL ---
+  // Rute di Laravel temen lu tetep /barang/{kodeBarcode} dan barcodenya udah aman kaga ada garis miring
+  Future<Response> getDetailBarang(String barcode) async {
+    // Kita panggil encodeComponent jaga-jaga kalau suatu saat ada spasi atau karakter aneh
+    String safeBarcode = Uri.encodeComponent(barcode);
+    return await _dio.get('/barang/$safeBarcode');
+  }
+
+  // Tambah Barang + Multi Foto (dokumentasi_barang[])
+  Future<Response> tambahBarang(Map<String, dynamic> dataKirim, {List<XFile>? multiFoto}) async {
+    FormData formData = FormData.fromMap(dataKirim);
+
+    if (multiFoto != null && multiFoto.isNotEmpty) {
+      for (var file in multiFoto) {
+        formData.files.add(MapEntry(
+          'dokumentasi_barang[]', 
+          await MultipartFile.fromFile(file.path, filename: file.name),
+        ));
+      }
+    }
+    return await _dio.post('/barang', data: formData);
+  }
+
+  // Update Barang + Multi Foto
+  Future<Response> updateBarangData(int id, Map<String, dynamic> dataKirim, {List<XFile>? multiFoto}) async {
+    FormData formData = FormData.fromMap(dataKirim);
+
+    if (multiFoto != null && multiFoto.isNotEmpty) {
+      for (var file in multiFoto) {
+        formData.files.add(MapEntry(
+          'dokumentasi_barang[]',
+          await MultipartFile.fromFile(file.path, filename: file.name),
+        ));
+      }
+    }
+    return await _dio.post('/barang/$id/update', data: formData);
+  }
+
+  Future<Response> hapusBarang(int id) async {
+    return await _dio.delete('/barang/$id');
   }
 
   Future<Response> updateKondisiBarang(int idBarang, Map<String, dynamic> data) async {
     FormData formData = FormData.fromMap({
       "status_kondisi": data['status_kondisi'],
       "catatan": data['catatan'] ?? "",
-      if (data.containsKey('foto_kondisi')) "foto_kondisi": data['foto_kondisi'], 
+      if (data.containsKey('foto_kondisi') && data['foto_kondisi'] != null) "foto_kondisi": data['foto_kondisi'], 
     });
     return await _dio.post('/barang/$idBarang/kondisi', data: formData);
   }
@@ -102,12 +149,65 @@ class ApiService {
     return await _dio.get('/kontrak');
   }
 
-  Future<Response> getDetailBarang(String barcode) async {
-    return await _dio.get('/barang/$barcode');
+  // ==========================================
+  // 3. ENDPOINT MOBILISASI (BAST)
+  // ==========================================
+  
+  Future<Response> getPendingMobilisasi() async {
+    return await _dio.get('/mobilisasi/pending');
   }
 
   Future<Response> submitMutasiBarang(Map<String, dynamic> data) async {
-    FormData formData = FormData.fromMap(data);
+    FormData formData = FormData();
+
+    data.forEach((key, value) {
+      if (key == 'id_barang' && value is List) {
+        for (var id in value) {
+          formData.fields.add(MapEntry('id_barang[]', id.toString()));
+        }
+      } else if (value is MultipartFile) {
+        formData.files.add(MapEntry(key, value));
+      } else {
+        formData.fields.add(MapEntry(key, value.toString()));
+      }
+    });
+
     return await _dio.post('/mobilisasi', data: formData); 
+  }
+
+  // ==========================================
+  // 4. ENDPOINT TUGAS (EVALUASI POIN 9)
+  // ==========================================
+  
+  Future<Response> getTugas({String? status, String? tanggal}) async {
+    Map<String, dynamic> qParams = {};
+    if (status != null && status.isNotEmpty) qParams['status'] = status;
+    if (tanggal != null && tanggal.isNotEmpty) qParams['tanggal'] = tanggal;
+    
+    return await _dio.get('/tugas', queryParameters: qParams);
+  }
+
+  Future<Response> getDetailTugas(int id) async {
+    return await _dio.get('/tugas/$id');
+  }
+
+  Future<Response> updateStatusTugas(int id, String status) async {
+    // Status isinya: 'Sudah Dibaca' atau 'Proses'
+    return await _dio.put('/tugas/$id/status', data: {'status': status});
+  }
+
+  Future<Response> completeTugas(int id, String catatan, {List<XFile>? multiFoto}) async {
+    FormData formData = FormData.fromMap({'catatan_petugas': catatan});
+
+    // Kirim banyak foto bukti tugas
+    if (multiFoto != null && multiFoto.isNotEmpty) {
+      for (var file in multiFoto) {
+        formData.files.add(MapEntry(
+          'foto_bukti_tugas[]',
+          await MultipartFile.fromFile(file.path, filename: file.name),
+        ));
+      }
+    }
+    return await _dio.post('/tugas/$id/complete', data: formData);
   }
 }

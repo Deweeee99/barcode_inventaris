@@ -4,13 +4,16 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/dashboard_model.dart'; 
+import '../../models/tugas_model.dart'; 
 import '../../services/api_services.dart'; 
 
 import 'asset_list_screen.dart'; 
 import 'bash_form_screen.dart'; 
 import 'scan_screen.dart'; 
 import 'form_add_asset_screen.dart';
-import 'profile_screen.dart'; // <--- Import ini Tuan!
+import 'profile_screen.dart'; 
+import 'task_list_screen.dart'; 
+import 'task_detail_screen.dart'; 
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -24,6 +27,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late Future<DashboardModel> _futureDashboard;
   
   int _selectedIndex = 0; 
+  
+  // --- STATE BUAT NOTIFIKASI DINAMIS ---
+  int _unreadNotifications = 0; 
+  List<TugasModel> _unreadTasks = [];
+  
+  int _lastNotifiedTaskId = -1;
 
   @override
   void initState() {
@@ -31,10 +40,49 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _futureDashboard = fetchDashboard();
   }
 
+  // --- JURUS BARU: POP UP DARI BAWAH (FLOATING SNACKBAR) ---
+  void _showNewTaskSnackbar(TugasModel tugas) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: const Color(0xFF0056D2),
+        elevation: 10,
+        margin: const EdgeInsets.all(20),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        duration: const Duration(seconds: 5),
+        content: Row(
+          children: [
+            const Icon(Icons.assignment_late_outlined, color: Colors.white, size: 28),
+            const SizedBox(width: 15),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text("Tugas Baru: ${tugas.namaPemberiTugas}", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white)),
+                  Text(tugas.deskripsi, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.white70)),
+                ],
+              ),
+            ),
+          ],
+        ),
+        action: SnackBarAction(
+          label: 'BUKA',
+          textColor: Colors.orangeAccent,
+          onPressed: () {
+            // Langsung buka laci lonceng pas dipencet
+            _showNotificationSheet();
+          },
+        ),
+      ),
+    );
+  }
+
   Future<DashboardModel> fetchDashboard() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
-    String namaUserAsli = prefs.getString('nama_user') ?? "Admin TSI";
+    String namaUserAsli = prefs.getString('nama_user') ?? "Petugas TSI";
 
+    // 1. Ambil Data Dashboard
     final response = await _apiService.getDashboardSummary(); 
     dynamic responseData;
 
@@ -89,6 +137,45 @@ class _DashboardScreenState extends State<DashboardScreen> {
        aktivitasDinamis.add(AktivitasModel(judul: "Belum Ada Aset", deskripsi: "Silakan tambah data aset", waktu: "-"));
     }
 
+    // 2. JURUS FIX PENUGASAN (Tarik Semua Dulu, Baru Filter Lokal)
+    try {
+      // Sekarang kita kaga nge-filter dari parameter API, tarik semua tugas dia!
+      final resTugas = await _apiService.getTugas();
+      var dataTugas = resTugas.data;
+      if (dataTugas is String) dataTugas = jsonDecode(dataTugas);
+      
+      List<dynamic> listRawTugas = dataTugas['data']?['data'] ?? dataTugas['data'] ?? [];
+      
+      if (mounted) {
+        List<TugasModel> allTasks = listRawTugas.map((e) => TugasModel.fromJson(e)).toList();
+        
+        // Filter mandiri di aplikasi (Tangkep "Pending" atau "Belum Dibaca")
+        List<TugasModel> newTasks = allTasks.where((t) {
+          String s = t.status.toLowerCase();
+          return s == 'belum dibaca' || s == 'pending';
+        }).toList();
+
+        // Cek kalau ada tugas baru yang belum di-pop-up
+        if (newTasks.isNotEmpty) {
+          var latestTask = newTasks.first;
+          if (_lastNotifiedTaskId != latestTask.idTugas) {
+            _lastNotifiedTaskId = latestTask.idTugas;
+            // Panggil snackbar setelah frame UI selesai di-build
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _showNewTaskSnackbar(latestTask);
+            });
+          }
+        }
+
+        setState(() {
+          _unreadTasks = newTasks;
+          _unreadNotifications = _unreadTasks.length; 
+        });
+      }
+    } catch (e) {
+      debugPrint("Gagal narik notif tugas: $e");
+    }
+
     return DashboardModel(
       namaUser: namaUserAsli,
       totalAset: totalData,
@@ -97,11 +184,112 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // --- JURUS SWITCHING HALAMAN ---
+  // --- FITUR LACI NOTIFIKASI (BOTTOM SHEET) ---
+  void _showNotificationSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true, 
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.65,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.only(topLeft: Radius.circular(25), topRight: Radius.circular(25)),
+              ),
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text("Notifikasi Penugasan", style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.bold)),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.grey), 
+                        onPressed: () => Navigator.pop(context),
+                      )
+                    ],
+                  ),
+                  const Divider(),
+                  const SizedBox(height: 10),
+                  
+                  Expanded(
+                    child: _unreadTasks.isEmpty 
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.done_all, size: 60, color: Colors.grey[300]),
+                              const SizedBox(height: 10),
+                              Text("Hore! Kaga ada tugas baru Tuan.", style: TextStyle(color: Colors.grey[500])),
+                            ],
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: _unreadTasks.length,
+                          itemBuilder: (context, index) {
+                            final tugas = _unreadTasks[index];
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 15),
+                              color: Colors.blue.withOpacity(0.05),
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(15), 
+                                side: BorderSide(color: Colors.blue.withOpacity(0.2))
+                              ),
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
+                                onTap: () async {
+                                  Navigator.pop(context); 
+                                  final res = await Navigator.push(context, MaterialPageRoute(builder: (context) => TaskDetailScreen(tugas: tugas)));
+                                  if (res == true) setState(() { _futureDashboard = fetchDashboard(); });
+                                },
+                                title: Text(tugas.deskripsi, style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 13), maxLines: 2, overflow: TextOverflow.ellipsis),
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const SizedBox(height: 5),
+                                    Text("Aset: ${tugas.namaBarang}", style: const TextStyle(fontSize: 11)),
+                                    Text("Tenggat: ${tugas.jadwalTenggat}", style: const TextStyle(fontSize: 11, color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                                trailing: IconButton(
+                                  icon: const Icon(Icons.check_circle_outline, color: Colors.green, size: 28),
+                                  tooltip: "Tandai Sudah Dibaca",
+                                  onPressed: () async {
+                                    try {
+                                      await _apiService.updateStatusTugas(tugas.idTugas, 'Sudah Dibaca');
+                                      setModalState(() { _unreadTasks.removeAt(index); }); 
+                                      setState(() { _unreadNotifications = _unreadTasks.length; }); 
+                                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sip! Tugas udah ditandain dibaca.'), backgroundColor: Colors.green));
+                                    } catch (e) {
+                                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Gagal ngupdate status!'), backgroundColor: Colors.red));
+                                    }
+                                  },
+                                ),
+                              ),
+                            );
+                          },
+                      ),
+                  )
+                ],
+              ),
+            );
+          }
+        );
+      }
+    ).then((_) {
+      setState(() { _futureDashboard = fetchDashboard(); });
+    });
+  }
+
   Widget _buildBody() {
     switch (_selectedIndex) {
       case 0: return _buildHomeContent();
-      case 3: return const ProfileScreen(); // Langsung tampilin layar profil
+      case 3: return const ProfileScreen(); 
       default: return _buildHomeContent();
     }
   }
@@ -110,9 +298,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
-      body: SafeArea(child: _buildBody()), // Gunakan _buildBody()
+      body: SafeArea(child: _buildBody()), 
 
-      floatingActionButton: _selectedIndex != 3 ? SizedBox( // Hide button if in profile
+      floatingActionButton: _selectedIndex != 3 ? SizedBox( 
         height: 70, width: 70,
         child: FloatingActionButton(
           onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (context) => const ScanScreen())),
@@ -155,9 +343,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return FutureBuilder<DashboardModel>(
       future: _futureDashboard,
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-        if (snapshot.hasError) return const Center(child: Text("Error"));
+        if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Color(0xFF0087FF)));
+        if (snapshot.hasError) return const Center(child: Text("Error memuat dashboard"));
         final data = snapshot.data!;
+        
         return RefreshIndicator(
           onRefresh: () async { setState(() { _futureDashboard = fetchDashboard(); }); },
           child: SingleChildScrollView(
@@ -171,7 +360,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     Text("Selamat pagi,", style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey[600])),
                     Text(data.namaUser, style: GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.bold)),
                   ]),
-                  Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4)]), child: const Icon(Icons.notifications_none_outlined, size: 28)),
+                  
+                  GestureDetector(
+                    onTap: _showNotificationSheet,
+                    child: Container(
+                      padding: const EdgeInsets.all(8), 
+                      decoration: BoxDecoration(
+                        color: Colors.white, 
+                        borderRadius: BorderRadius.circular(12), 
+                        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)]
+                      ), 
+                      child: Stack(
+                        children: [
+                          const Icon(Icons.notifications_none_outlined, size: 28),
+                          if (_unreadNotifications > 0)
+                            Positioned(
+                              right: 0,
+                              top: 0,
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: const BoxDecoration(
+                                  color: Colors.redAccent,
+                                  shape: BoxShape.circle,
+                                ),
+                                constraints: const BoxConstraints(minWidth: 12, minHeight: 12),
+                                child: Text(
+                                  _unreadNotifications.toString(), 
+                                  style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            )
+                        ],
+                      ),
+                    ),
+                  ),
                 ]),
                 const SizedBox(height: 25),
                 Row(children: [
@@ -189,7 +412,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     if (res == true) setState(() { _futureDashboard = fetchDashboard(); });
                   }),
                   _buildMenu("Mutasi", Icons.swap_horiz, Colors.purple, () => Navigator.push(context, MaterialPageRoute(builder: (context) => const BastFormScreen()))),
-                  _buildMenu("Laporan", Icons.insert_chart_outlined, Colors.orange, null),
+                  _buildMenu("Penugasan", Icons.assignment_turned_in_outlined, Colors.orange, () {
+                    Navigator.push(context, MaterialPageRoute(builder: (context) => const TaskListScreen()));
+                  }),
                 ]),
                 const SizedBox(height: 35),
                 Text("AKTIVITAS TERBARU", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14)),
@@ -249,9 +474,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final isSelected = _selectedIndex == index;
     return GestureDetector(
       onTap: () {
-        if (index == 1) Navigator.push(context, MaterialPageRoute(builder: (context) => const AssetListScreen()));
-        else if (index == 2) Navigator.push(context, MaterialPageRoute(builder: (context) => const BastFormScreen()));
-        else setState(() => _selectedIndex = index);
+        if (index == 1) {
+          Navigator.push(context, MaterialPageRoute(builder: (context) => const AssetListScreen()));
+        } else if (index == 2) {
+          Navigator.push(context, MaterialPageRoute(builder: (context) => const BastFormScreen()));
+        } else {
+          setState(() => _selectedIndex = index);
+        }
       },
       child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
         Icon(icon, color: isSelected ? const Color(0xFF0087FF) : Colors.grey, size: 26),

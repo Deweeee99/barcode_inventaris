@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/api_services.dart';
-import 'login_screens.dart';
+import 'login_screen.dart'; // --- FIX TYPO IMPORT ---
+import 'dashboard_screen.dart'; // --- IMPORT DASHBOARD BIAR BISA BALIK ---
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -104,9 +105,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 children: [
                   Row(
                     children: [
+                      // --- FIX: Jurus anti layar item ---
                       IconButton(
                         icon: const Icon(Icons.arrow_back, color: Colors.white),
-                        onPressed: () => Navigator.pop(context),
+                        onPressed: () {
+                          // Jangan di pop, mending replace ke Dashboard biar tabnya balik ke Beranda
+                          Navigator.pushReplacement(
+                            context,
+                            MaterialPageRoute(builder: (context) => const DashboardScreen()),
+                          );
+                        },
                       ),
                       Expanded(
                         child: Text(
